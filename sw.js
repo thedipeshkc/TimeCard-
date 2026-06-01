@@ -1,60 +1,44 @@
-/* ─────────────────────────────────────────────────────────────
-   TimeCard — sw.js  (Service Worker)
-   ───────────────────────────────────────────────────────────── */
-
-const CACHE_NAME    = 'timecard-v1';
-const OFFLINE_URL   = '/';
+/* TimeCard — sw.js */
+const CACHE = 'timecard-v2';
+const BASE  = self.location.pathname.replace('/sw.js', '');
 
 const PRECACHE = [
-  '/',
-  '/index.html',
-  '/style.css',
-  '/app.js',
-  '/manifest.json',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
+  BASE + '/',
+  BASE + '/index.html',
+  BASE + '/style.css',
+  BASE + '/app.js',
+  BASE + '/manifest.json',
+  BASE + '/icons/icon-192.png',
+  BASE + '/icons/icon-512.png',
 ];
 
-/* ── Install: pre-cache all shell assets ── */
-self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(PRECACHE))
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => c.addAll(PRECACHE))
       .then(() => self.skipWaiting())
   );
 });
 
-/* ── Activate: clean up old caches ── */
-self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-/* ── Fetch: cache-first for shell, network-first for fonts ── */
-self.addEventListener('fetch', event => {
-  const { request } = event;
-  const url = new URL(request.url);
-
-  // Only handle same-origin or Google Fonts
-  if (url.origin !== location.origin && !url.hostname.includes('fonts.g')) return;
-
-  event.respondWith(
-    caches.match(request).then(cached => {
+self.addEventListener('fetch', e => {
+  e.respondWith(
+    caches.match(e.request).then(cached => {
       if (cached) return cached;
-      return fetch(request).then(response => {
-        // Cache valid responses (fonts etc.)
-        if (response && response.status === 200 && response.type !== 'opaque') {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+      return fetch(e.request).then(res => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
         }
-        return response;
-      }).catch(() => {
-        // Offline fallback for navigation
-        if (request.mode === 'navigate') return caches.match(OFFLINE_URL);
-      });
+        return res;
+      }).catch(() => caches.match(BASE + '/index.html'));
     })
   );
 });

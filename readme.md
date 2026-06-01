@@ -1,12 +1,12 @@
 # TimeCard — Work Hours Tracker
 
 A professional, installable PWA for tracking work hours, calculating overtime, and estimating pay. All data stays on-device.
-https://thedipeshkc.github.io/TimeCard-/
+https://thedipeshkc.github.io/TimeCard/
 
 ## Install on Mobile
 
 ### Android (Chrome)
-After visiting the live URL, https://thedipeshkc.github.io/TimeCard-/
+After visiting the live URL, https://thedipeshkc.github.io/TimeCard/
 Chrome shows an **"Add to Home Screen"** banner automatically, 
 or tap the menu (⋮) → **Add to Home Screen**.
 

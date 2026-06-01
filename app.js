@@ -878,7 +878,11 @@ document.addEventListener('DOMContentLoaded',init);
 
 // ── PWA ────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').then(r=>console.log('[SW]',r.scope)).catch(e=>console.warn('[SW]',e)));
+  window.addEventListener('load',()=>{
+    const swPath = window.location.pathname.replace(/\/[^/]*$/, '') + '/sw.js';
+    navigator.serviceWorker.register(swPath, { scope: window.location.pathname.replace(/\/[^/]*$/, '') + '/' })
+      .then(r=>console.log('[SW]',r.scope)).catch(e=>console.warn('[SW]',e));
+  });
 }
 let _dip=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();_dip=e;if(!localStorage.getItem('tc_install_dismissed')){const b=el('install-banner');if(b)b.classList.remove('hidden');}});
