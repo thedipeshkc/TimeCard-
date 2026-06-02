@@ -257,31 +257,34 @@ function buildSel(opts,selected,cls,data){
 }
 
 // ════════════════════════════════════════════════════════════════
-//  CALCULATOR TAB — date-driven, 5-col, mobile-first large UI
+//  CALCULATOR TAB — responsive (desktop 5-col, mobile card rows)
 // ════════════════════════════════════════════════════════════════
 function renderCalculator(){
   const wrap=document.createElement('div');
   wrap.className='calc-wrap';
   const s=state.calcSettings;
-  const rate=parseFloat(s.rate)||0,otW=parseFloat(s.otWeek)||40,otD=parseFloat(s.otDay)||8;
+  const rate=parseFloat(s.rate)||0, otW=parseFloat(s.otWeek)||40, otD=parseFloat(s.otDay)||8;
   const period=s.payPeriod||'weekly';
   const {dates,start,end}=getCalcDates();
 
-  // ── Settings strip (compact, collapsible feel) ──
+  // ── Settings strip ──
   const pCard=div('card calc-settings-strip');
   pCard.innerHTML=`
     <div class="calc-settings-row">
-      <div class="field"><label>Rate ($/hr)</label><input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01"/></div>
-      <div class="field"><label>Period</label><select id="cs-period">
-        <option value="weekly"${period==='weekly'?' selected':''}>Weekly</option>
-        <option value="biweekly"${period==='biweekly'?' selected':''}>Bi-weekly</option>
-        <option value="monthly"${period==='monthly'?' selected':''}>Monthly</option>
-      </select></div>
-      <div class="field"><label>OT after (h/wk)</label><input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1"/></div>
+      <div class="field"><label>Rate ($/hr)</label>
+        <input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01"/></div>
+      <div class="field"><label>Period</label>
+        <select id="cs-period">
+          <option value="weekly"${period==='weekly'?' selected':''}>Weekly</option>
+          <option value="biweekly"${period==='biweekly'?' selected':''}>Bi-weekly</option>
+          <option value="monthly"${period==='monthly'?' selected':''}>Monthly</option>
+        </select></div>
+      <div class="field"><label>OT after (h/wk)</label>
+        <input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1"/></div>
     </div>`;
   ['cs-rate','cs-period','cs-otweek'].forEach(id=>{
     const inp=pCard.querySelector('#'+id);
-    if(inp)inp.addEventListener('input',()=>{
+    if(inp) inp.addEventListener('input',()=>{
       state.calcSettings={...state.calcSettings,
         rate:pCard.querySelector('#cs-rate')?.value||'',
         payPeriod:pCard.querySelector('#cs-period')?.value||'weekly',
@@ -289,30 +292,30 @@ function renderCalculator(){
         otDay:state.calcSettings.otDay||8
       };
       state.calcPeriodOffset=0;
-      saveUserSettings(state.calcSettings);refreshCalcView();
+      saveUserSettings(state.calcSettings); refreshCalcView();
     });
   });
   wrap.appendChild(pCard);
 
   // ── Period nav ──
-  const periodLabel=period==='monthly'
-    ?start.toLocaleDateString([],{month:'long',year:'numeric'})
-    :start.toLocaleDateString([],{month:'short',day:'numeric'})+' – '+end.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+  const periodTitle=period==='monthly'
+    ? start.toLocaleDateString([],{month:'long',year:'numeric'})
+    : start.toLocaleDateString([],{month:'short',day:'numeric'})+' – '+end.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
 
   const navBar=div('calc-period-nav');
   navBar.innerHTML=`
-    <button class="btn btn-outline btn-sm" id="cp-prev">‹</button>
+    <button class="btn btn-outline btn-sm" id="cp-prev">‹ Prev</button>
     <div class="cp-label">
       <span class="cp-period-name">${period==='biweekly'?'Bi-Weekly':period.charAt(0).toUpperCase()+period.slice(1)}</span>
-      <span class="cp-period-dates">${periodLabel}</span>
+      <span class="cp-period-dates">${periodTitle}</span>
     </div>
-    <button class="btn btn-outline btn-sm" id="cp-next">›</button>`;
+    <button class="btn btn-outline btn-sm" id="cp-next">Next ›</button>`;
   wrap.appendChild(navBar);
 
-  // ── 5-column time sheet ──
+  // ── Sheet ──
   const sheetCard=div('card calc-sheet-card');
 
-  // Column headers
+  // Desktop header (hidden on mobile via CSS)
   const hdr=div('ts-header');
   hdr.innerHTML=`
     <div class="ts-col-date">Date</div>
@@ -328,73 +331,122 @@ function renderCalculator(){
   dates.forEach(dateStr=>{
     if(!state.dateShifts[dateStr]) state.dateShifts[dateStr]={...emptyShiftRow(),enabled:false};
     const row=state.dateShifts[dateStr];
-    const mins=row.enabled?calcRowMins(row):0;
+    const mins=row.enabled ? calcRowMins(row) : 0;
     totalPeriodMins+=mins;
-    const dh=mins/60;
-    const isOT=mins>0&&dh>otD;
+    const dh=mins/60, isOT=mins>0&&dh>otD;
     const isToday=dateStr===today;
     const d=new Date(dateStr+'T12:00:00');
     const isWeekend=d.getDay()===0||d.getDay()===6;
+    const dayShort=d.toLocaleDateString([],{weekday:'short'});
+    const dayFull=d.toLocaleDateString([],{weekday:'long'});
+    const dateDisp=d.toLocaleDateString([],{month:'short',day:'numeric'});
 
     const rowEl=div('ts-row'+(isToday?' ts-today':'')+(isWeekend?' ts-weekend':'')+(row.enabled?' ts-active':''));
     rowEl.dataset.date=dateStr;
 
-    // Col 1 — Date (with checkbox to enable)
+    // ── DESKTOP columns (shown ≥640px via CSS) ──
+
+    // Col 1 — Date + checkbox
     const colDate=div('ts-col-date');
-    const dateDisp=d.toLocaleDateString([],{month:'short',day:'numeric'});
     colDate.innerHTML=`
       <label class="ts-date-toggle">
-        <input type="checkbox" class="wg-day-check" data-date="${dateStr}" ${row.enabled?'checked':''}/>
+        <input type="checkbox" class="ts-check" data-date="${dateStr}" ${row.enabled?'checked':''}/>
         <span class="ts-date-num">${dateDisp}</span>
       </label>`;
     rowEl.appendChild(colDate);
 
-    // Col 2 — Day name
+    // Col 2 — Day
     const colDay=div('ts-col-day');
-    colDay.innerHTML=`<span class="ts-day-name">${d.toLocaleDateString([],{weekday:'short'})}</span>`;
+    colDay.innerHTML=`<span class="ts-day-name">${dayShort}</span>`;
     rowEl.appendChild(colDay);
 
     // Col 3 — Clock In
     const colIn=div('ts-col-time');
-    const inPicker=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
+    const inPick=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
     const sh=buildSel(HOURS12,row.startH,'ts-sel ts-h',{date:dateStr,field:'startH'});
     const sm=buildSel(MINS_LIST,row.startM,'ts-sel ts-m',{date:dateStr,field:'startM'});
     const sp=buildSel(['AM','PM'],row.startP,'ts-sel ts-ap',{date:dateStr,field:'startP'});
     if(!row.enabled){sh.disabled=sm.disabled=sp.disabled=true;}
-    inPicker.append(sh,mkSep(),sm,mkSpace(),sp);
-    colIn.appendChild(inPicker);
-    rowEl.appendChild(colIn);
+    inPick.append(sh,mkSep(),sm,mkSpace(),sp);
+    colIn.appendChild(inPick); rowEl.appendChild(colIn);
 
     // Col 4 — Clock Out
     const colOut=div('ts-col-time');
-    const outPicker=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
+    const outPick=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
     const eh=buildSel(HOURS12,row.endH,'ts-sel ts-h',{date:dateStr,field:'endH'});
     const em=buildSel(MINS_LIST,row.endM,'ts-sel ts-m',{date:dateStr,field:'endM'});
     const ep=buildSel(['AM','PM'],row.endP,'ts-sel ts-ap',{date:dateStr,field:'endP'});
     if(!row.enabled){eh.disabled=em.disabled=ep.disabled=true;}
-    outPicker.append(eh,mkSep(),em,mkSpace(),ep);
-    colOut.appendChild(outPicker);
-    rowEl.appendChild(colOut);
+    outPick.append(eh,mkSep(),em,mkSpace(),ep);
+    colOut.appendChild(outPick); rowEl.appendChild(colOut);
 
-    // Col 5 — Total
-    const colTotal=div('ts-col-total');
+    // Col 5 — Total (desktop)
+    const colTot=div('ts-col-total');
     if(mins>0){
-      colTotal.innerHTML=`
-        <span class="ts-total-num${isOT?' ts-ot':''}">${fmtDur(mins)}</span>
-        <span class="ts-total-plain">${plainDur(mins)}</span>`;
+      colTot.innerHTML=`<span class="ts-total-num${isOT?' ts-ot':''}">${fmtDur(mins)}</span><span class="ts-total-plain">${plainDur(mins)}</span>`;
     } else if(row.enabled){
-      colTotal.innerHTML=`<span class="ts-total-zero">0h</span>`;
+      colTot.innerHTML=`<span class="ts-total-zero">0h</span>`;
     } else {
-      colTotal.innerHTML=`<span class="ts-off-label">—</span>`;
+      colTot.innerHTML=`<span class="ts-off-label">—</span>`;
     }
-    rowEl.appendChild(colTotal);
+    rowEl.appendChild(colTot);
+
+    // ── MOBILE layout (shown <640px via CSS) ──
+    // Top bar: checkbox + date + day name + total
+    const mobHdr=div('ts-mobile-header');
+    const mobToggle=document.createElement('label');
+    mobToggle.className='ts-mobile-toggle';
+    const mobCb=document.createElement('input');
+    mobCb.type='checkbox'; mobCb.className='ts-check'; mobCb.dataset.date=dateStr;
+    if(row.enabled) mobCb.checked=true;
+    const mobCheckDot=div('ts-mobile-check');
+    const mobDateSpan=document.createElement('span');
+    mobDateSpan.className='ts-mobile-date'; mobDateSpan.textContent=dateDisp;
+    const mobDaySpan=document.createElement('span');
+    mobDaySpan.className='ts-mobile-day'; mobDaySpan.textContent=dayFull;
+    mobToggle.append(mobCb, mobCheckDot, mobDateSpan, mobDaySpan);
+    mobHdr.appendChild(mobToggle);
+
+    // Total on right
+    const mobTotWrap=div('');
+    if(mins>0){
+      mobTotWrap.innerHTML=`<span class="ts-mobile-total${isOT?' ts-ot':''}">${fmtDur(mins)}</span><span class="ts-mobile-plain">${plainDur(mins)}</span>`;
+    } else if(!row.enabled){
+      mobTotWrap.innerHTML=`<span class="ts-mobile-off">off</span>`;
+    }
+    mobHdr.appendChild(mobTotWrap);
+    rowEl.appendChild(mobHdr);
+
+    // Time pickers row: IN → OUT (full width, big)
+    const mobTimes=div('ts-mobile-times');
+
+    const mobInLabel=div('ts-mobile-label'); mobInLabel.textContent='IN';
+    const mobInPick=div('ts-mobile-picker'+(row.enabled?'':' ts-mobile-picker-off'));
+    const msh=buildSel(HOURS12,row.startH,'ts-sel ts-h',{date:dateStr,field:'startH'});
+    const msm=buildSel(MINS_LIST,row.startM,'ts-sel ts-m',{date:dateStr,field:'startM'});
+    const msp=buildSel(['AM','PM'],row.startP,'ts-sel ts-ap',{date:dateStr,field:'startP'});
+    if(!row.enabled){msh.disabled=msm.disabled=msp.disabled=true;}
+    mobInPick.append(msh,mkSep(),msm,mkSpace(),msp);
+
+    const mobArrow=div('ts-mobile-arrow'); mobArrow.textContent='→';
+
+    const mobOutLabel=div('ts-mobile-label'); mobOutLabel.textContent='OUT';
+    const mobOutPick=div('ts-mobile-picker'+(row.enabled?'':' ts-mobile-picker-off'));
+    const meh=buildSel(HOURS12,row.endH,'ts-sel ts-h',{date:dateStr,field:'endH'});
+    const mem=buildSel(MINS_LIST,row.endM,'ts-sel ts-m',{date:dateStr,field:'endM'});
+    const mep=buildSel(['AM','PM'],row.endP,'ts-sel ts-ap',{date:dateStr,field:'endP'});
+    if(!row.enabled){meh.disabled=mem.disabled=mep.disabled=true;}
+    mobOutPick.append(meh,mkSep(),mem,mkSpace(),mep);
+
+    mobTimes.append(mobInLabel, mobInPick, mobArrow, mobOutLabel, mobOutPick);
+    rowEl.appendChild(mobTimes);
 
     sheetCard.appendChild(rowEl);
   });
 
-  // Footer row
+  // Footer
   const periodH=totalPeriodMins/60;
-  const regH=Math.min(periodH,otW),otH=Math.max(0,periodH-otW);
+  const regH=Math.min(periodH,otW), otH=Math.max(0,periodH-otW);
   const totalPay=regH*rate+otH*rate*1.5;
   const footLabel=period==='monthly'?'Month Total':period==='biweekly'?'2-Week Total':'Week Total';
 
@@ -412,17 +464,17 @@ function renderCalculator(){
     </div>`;
   sheetCard.appendChild(footRow);
 
-  // Action bar
+  // Actions
   const actions=div('calc-actions');
   actions.innerHTML=`
     <button class="btn btn-calc-print" id="calc-print">
-      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><rect x="4" y="7" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><path d="M6 7V4h8v3M6 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>PRINT
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><rect x="4" y="7" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><path d="M6 7V4h8v3M6 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>PRINT
     </button>
     <button class="btn btn-calc-action" id="calc-save">
-      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>SAVE
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>SAVE
     </button>
     <button class="btn btn-calc-action" id="calc-clear">
-      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>CLEAR
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>CLEAR
     </button>
     <div class="calc-wk-total">
       ${footLabel}: <strong style="color:var(--green)">${totalPeriodMins>0?fmtDur(totalPeriodMins):'—'}</strong>
@@ -431,7 +483,7 @@ function renderCalculator(){
   sheetCard.appendChild(actions);
   wrap.appendChild(sheetCard);
 
-  // ── Summary card ──
+  // ── Summary ──
   if(totalPeriodMins>0){
     const sumCard=div('card');
     const sg=div('stat-grid');
@@ -443,7 +495,7 @@ function renderCalculator(){
     sumCard.appendChild(sg);
     const callout=div('summary-callout');
     let txt=`You worked <strong>${plainDur(totalPeriodMins)}</strong> this ${period==='monthly'?'month':'period'}`;
-    if(otH>0)txt+=`, including <strong>${plainDur(otH*60)} of overtime</strong>`;
+    if(otH>0) txt+=`, including <strong>${plainDur(otH*60)} of overtime</strong>`;
     txt+='.';
     if(rate>0){txt+=` At <strong>${fmtMoney(rate)}/hr</strong>${otH>0?' with overtime at 1.5×':''}, your estimated pay is <strong>${fmtMoney(totalPay)}</strong>.`;}
     callout.innerHTML=txt;
@@ -451,41 +503,38 @@ function renderCalculator(){
     wrap.appendChild(sumCard);
   }
 
-  // ── Bind nav ──
+  // ── Bindings ──
   navBar.querySelector('#cp-prev').addEventListener('click',()=>{state.calcPeriodOffset--;refreshCalcView();});
   navBar.querySelector('#cp-next').addEventListener('click',()=>{state.calcPeriodOffset++;refreshCalcView();});
 
-  // ── Bind checkboxes ──
-  qsa('.wg-day-check',wrap).forEach(cb=>{
+  // All checkboxes (desktop + mobile both rendered — bind by class)
+  qsa('.ts-check',wrap).forEach(cb=>{
     cb.addEventListener('change',e=>{
       const d=e.target.dataset.date;
-      if(!state.dateShifts[d])state.dateShifts[d]={...emptyShiftRow()};
+      if(!state.dateShifts[d]) state.dateShifts[d]={...emptyShiftRow()};
       state.dateShifts[d].enabled=e.target.checked;
       refreshCalcView();
     });
   });
 
-  // ── Bind selects ──
+  // All time selects
   qsa('.ts-sel',wrap).forEach(sel=>{
     sel.addEventListener('change',e=>{
       const {date,field}=e.target.dataset;
-      if(!date)return;
-      if(!state.dateShifts[date])state.dateShifts[date]={...emptyShiftRow(),enabled:true};
+      if(!date) return;
+      if(!state.dateShifts[date]) state.dateShifts[date]={...emptyShiftRow(),enabled:true};
       state.dateShifts[date][field]=e.target.value;
       refreshCalcView();
     });
   });
 
-  // PRINT
   wrap.querySelector('#calc-print').addEventListener('click',()=>window.print());
-
-  // SAVE
   wrap.querySelector('#calc-save').addEventListener('click',()=>{
     let saved=0;
     dates.forEach(dateStr=>{
       const row=state.dateShifts[dateStr];
-      if(!row||!row.enabled)return;
-      const mins=calcRowMins(row);if(!mins)return;
+      if(!row||!row.enabled) return;
+      const mins=calcRowMins(row); if(!mins) return;
       const sm=to24Mins(row.startH,row.startM,row.startP);
       const em=to24Mins(row.endH,row.endM,row.endP);
       const sh=String(Math.floor(sm/60)).padStart(2,'0')+':'+String(sm%60).padStart(2,'0');
@@ -493,10 +542,8 @@ function renderCalculator(){
       saveEntry({id:genId(),clockIn:new Date(dateStr+'T'+sh).toISOString(),clockOut:new Date(dateStr+'T'+eh).toISOString(),durationMins:mins,note:'',source:'manual'});
       saved++;
     });
-    showToast(saved?saved+' day'+(saved!==1?'s':'')+' saved to history':'Check days on to save');
+    showToast(saved?saved+' day'+(saved!==1?'s':'')+' saved':'Check days on to save');
   });
-
-  // CLEAR
   wrap.querySelector('#calc-clear').addEventListener('click',()=>{
     dates.forEach(d=>{delete state.dateShifts[d];});
     refreshCalcView();
@@ -506,7 +553,7 @@ function renderCalculator(){
 }
 
 function mkSep(){const s=document.createElement('span');s.className='tp-sep';s.textContent=':';return s;}
-function mkSpace(){const s=document.createElement('span');s.style.width='5px';s.style.display='inline-block';return s;}
+function mkSpace(){const s=document.createElement('span');s.style.cssText='width:4px;display:inline-block;flex-shrink:0';return s;}
 function mkSep2(){return mkSpace();}
 
 function refreshCalcView(){
