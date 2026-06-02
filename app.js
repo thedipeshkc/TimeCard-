@@ -17,22 +17,41 @@ const MINS_LIST = Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
 // ── State ──────────────────────────────────────────────────────
 let state = {
   user:null, users:{}, tab:'calculator',
-  weekShifts: buildEmptyWeek(),
+  dateShifts:{},
   calcSettings:{rate:'',otWeek:40,otDay:8,payPeriod:'weekly',employeeName:'',payPeriodLabel:''},
+  calcPeriodOffset:0,
   clockInTime:null, clockTimer:null,
   calYear:new Date().getFullYear(), calMonth:new Date().getMonth()+1,
   calSelectedDate:null,
   histFilter:'all',
   weekOffset:0, tcView:'weekly',
   loginMode:'login', loginError:'',
-  // Pay period range tracker
   rangeFrom:'', rangeTo:'',
 };
 
-function buildEmptyWeek(){
-  const w={};
-  WEEK_KEYS.forEach(d=>{w[d]={startH:'9',startM:'00',startP:'AM',endH:'5',endM:'00',endP:'PM'};});
-  return w;
+function emptyShiftRow(){ return {startH:'9',startM:'00',startP:'AM',endH:'5',endM:'00',endP:'PM'}; }
+
+function getCalcDates(){
+  const period=state.calcSettings.payPeriod||'weekly';
+  const today=new Date();
+  const offset=state.calcPeriodOffset;
+  let start,end;
+  if(period==='weekly'){
+    const dow=today.getDay();const diffToMon=dow===0?-6:1-dow;
+    start=new Date(today);start.setDate(today.getDate()+diffToMon+offset*7);start.setHours(0,0,0,0);
+    end=new Date(start);end.setDate(start.getDate()+6);
+  } else if(period==='biweekly'){
+    const dow=today.getDay();const diffToMon=dow===0?-6:1-dow;
+    start=new Date(today);start.setDate(today.getDate()+diffToMon+offset*14);start.setHours(0,0,0,0);
+    end=new Date(start);end.setDate(start.getDate()+13);
+  } else {
+    const d=new Date(today.getFullYear(),today.getMonth()+offset,1);
+    start=new Date(d);start.setHours(0,0,0,0);
+    end=new Date(d.getFullYear(),d.getMonth()+1,0);end.setHours(23,59,59,999);
+  }
+  const dates=[];let cur=new Date(start);
+  while(cur<=end){dates.push(isoDate(cur));cur=new Date(cur);cur.setDate(cur.getDate()+1);}
+  return {dates,start,end};
 }
 
 // ── DB ─────────────────────────────────────────────────────────
@@ -238,164 +257,221 @@ function buildSel(opts,selected,cls,data){
 }
 
 // ════════════════════════════════════════════════════════════════
-//  CALCULATOR TAB
+//  CALCULATOR TAB — date-driven, 5-col, mobile-first large UI
 // ════════════════════════════════════════════════════════════════
 function renderCalculator(){
   const wrap=document.createElement('div');
+  wrap.className='calc-wrap';
   const s=state.calcSettings;
+  const rate=parseFloat(s.rate)||0,otW=parseFloat(s.otWeek)||40,otD=parseFloat(s.otDay)||8;
+  const period=s.payPeriod||'weekly';
+  const {dates,start,end}=getCalcDates();
 
-  // ── Employee / pay period header ──
-  const hCard=div('card');
-  hCard.innerHTML=`
-    <div class="calc-header-fields">
-      <div class="field" style="flex:1"><label>Employee Name</label><input type="text" id="calc-emp" placeholder="Employee Name" value="${s.employeeName||''}"/></div>
-      <div class="field" style="flex:1"><label>Pay Period</label><input type="text" id="calc-period-lbl" placeholder="e.g. Jun 1 – Jun 7, 2025" value="${s.payPeriodLabel||''}"/></div>
-    </div>`;
-  hCard.querySelector('#calc-emp').addEventListener('input',e=>{state.calcSettings.employeeName=e.target.value;});
-  hCard.querySelector('#calc-period-lbl').addEventListener('input',e=>{state.calcSettings.payPeriodLabel=e.target.value;});
-  wrap.appendChild(hCard);
-
-  // ── Pay settings ──
-  const pCard=div('card');
+  // ── Settings strip (compact, collapsible feel) ──
+  const pCard=div('card calc-settings-strip');
   pCard.innerHTML=`
-    <div class="card-header"><span class="card-title">Pay settings</span></div>
-    <div class="form-row cols-4">
-      <div class="field"><label>Hourly rate ($)</label><input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01"/></div>
-      <div class="field"><label>Pay period</label><select id="cs-period"><option value="weekly"${s.payPeriod==='weekly'?' selected':''}>Weekly</option><option value="biweekly"${s.payPeriod==='biweekly'?' selected':''}>Bi-weekly</option><option value="monthly"${s.payPeriod==='monthly'?' selected':''}>Monthly</option></select></div>
-      <div class="field"><label>Weekly OT after</label><input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1"/><div class="hint">hrs/week</div></div>
-      <div class="field"><label>Daily OT after</label><input type="number" id="cs-otday" value="${s.otDay||8}" min="1" step="0.5"/><div class="hint">hrs/day</div></div>
+    <div class="calc-settings-row">
+      <div class="field"><label>Rate ($/hr)</label><input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01"/></div>
+      <div class="field"><label>Period</label><select id="cs-period">
+        <option value="weekly"${period==='weekly'?' selected':''}>Weekly</option>
+        <option value="biweekly"${period==='biweekly'?' selected':''}>Bi-weekly</option>
+        <option value="monthly"${period==='monthly'?' selected':''}>Monthly</option>
+      </select></div>
+      <div class="field"><label>OT after (h/wk)</label><input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1"/></div>
     </div>`;
-  ['cs-rate','cs-period','cs-otweek','cs-otday'].forEach(id=>{
+  ['cs-rate','cs-period','cs-otweek'].forEach(id=>{
     const inp=pCard.querySelector('#'+id);
     if(inp)inp.addEventListener('input',()=>{
-      state.calcSettings={...state.calcSettings,rate:pCard.querySelector('#cs-rate')?.value||'',payPeriod:pCard.querySelector('#cs-period')?.value||'weekly',otWeek:parseFloat(pCard.querySelector('#cs-otweek')?.value)||40,otDay:parseFloat(pCard.querySelector('#cs-otday')?.value)||8};
+      state.calcSettings={...state.calcSettings,
+        rate:pCard.querySelector('#cs-rate')?.value||'',
+        payPeriod:pCard.querySelector('#cs-period')?.value||'weekly',
+        otWeek:parseFloat(pCard.querySelector('#cs-otweek')?.value)||40,
+        otDay:state.calcSettings.otDay||8
+      };
+      state.calcPeriodOffset=0;
       saveUserSettings(state.calcSettings);refreshCalcView();
     });
   });
   wrap.appendChild(pCard);
 
-  // ── Weekly time sheet grid ──
-  const rate=parseFloat(s.rate)||0,otW=parseFloat(s.otWeek)||40,otD=parseFloat(s.otDay)||8;
-  let totalWeekMins=0;
-  const gCard=div('card');
-  gCard.innerHTML=`<div class="card-header"><span class="card-title">Weekly Time Sheet</span></div>`;
+  // ── Period nav ──
+  const periodLabel=period==='monthly'
+    ?start.toLocaleDateString([],{month:'long',year:'numeric'})
+    :start.toLocaleDateString([],{month:'short',day:'numeric'})+' – '+end.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
 
-  const grid=div('weekly-grid');
+  const navBar=div('calc-period-nav');
+  navBar.innerHTML=`
+    <button class="btn btn-outline btn-sm" id="cp-prev">‹</button>
+    <div class="cp-label">
+      <span class="cp-period-name">${period==='biweekly'?'Bi-Weekly':period.charAt(0).toUpperCase()+period.slice(1)}</span>
+      <span class="cp-period-dates">${periodLabel}</span>
+    </div>
+    <button class="btn btn-outline btn-sm" id="cp-next">›</button>`;
+  wrap.appendChild(navBar);
 
-  // header row
-  const thead=div('wg-header');
-  thead.innerHTML=`<div class="wg-col-day">Day</div><div class="wg-col-time">Starting Time</div><div class="wg-col-time">Ending Time</div><div class="wg-col-total">Total</div>`;
-  grid.appendChild(thead);
+  // ── 5-column time sheet ──
+  const sheetCard=div('card calc-sheet-card');
 
-  WEEK_KEYS.forEach(day=>{
-    const row=state.weekShifts[day];
-    const mins=calcRowMins(row);
-    totalWeekMins+=mins;
+  // Column headers
+  const hdr=div('ts-header');
+  hdr.innerHTML=`
+    <div class="ts-col-date">Date</div>
+    <div class="ts-col-day">Day</div>
+    <div class="ts-col-time">Clock In</div>
+    <div class="ts-col-time">Clock Out</div>
+    <div class="ts-col-total">Total</div>`;
+  sheetCard.appendChild(hdr);
+
+  const today=todayStr();
+  let totalPeriodMins=0;
+
+  dates.forEach(dateStr=>{
+    if(!state.dateShifts[dateStr]) state.dateShifts[dateStr]={...emptyShiftRow(),enabled:false};
+    const row=state.dateShifts[dateStr];
+    const mins=row.enabled?calcRowMins(row):0;
+    totalPeriodMins+=mins;
     const dh=mins/60;
     const isOT=mins>0&&dh>otD;
+    const isToday=dateStr===today;
+    const d=new Date(dateStr+'T12:00:00');
+    const isWeekend=d.getDay()===0||d.getDay()===6;
 
-    const rowEl=div('wg-row');rowEl.dataset.day=day;
+    const rowEl=div('ts-row'+(isToday?' ts-today':'')+(isWeekend?' ts-weekend':'')+(row.enabled?' ts-active':''));
+    rowEl.dataset.date=dateStr;
 
-    // Day label
-    const dayCol=div('wg-col-day wg-day-label');dayCol.textContent=WEEK_FULL[day];rowEl.appendChild(dayCol);
+    // Col 1 — Date (with checkbox to enable)
+    const colDate=div('ts-col-date');
+    const dateDisp=d.toLocaleDateString([],{month:'short',day:'numeric'});
+    colDate.innerHTML=`
+      <label class="ts-date-toggle">
+        <input type="checkbox" class="wg-day-check" data-date="${dateStr}" ${row.enabled?'checked':''}/>
+        <span class="ts-date-num">${dateDisp}</span>
+      </label>`;
+    rowEl.appendChild(colDate);
 
-    // Start time
-    const startCol=div('wg-col-time');
-    const startPicker=div('time-picker');
-    const sh=buildSel(HOURS12,row.startH,'tp-sel tp-h',{day,field:'startH'});
-    const sm=buildSel(MINS_LIST,row.startM,'tp-sel tp-m',{day,field:'startM'});
-    const sp=buildSel(['AM','PM'],row.startP,'tp-sel tp-ap',{day,field:'startP'});
-    startPicker.append(sh,mkSep(),sm,mkSep2(),sp);
-    startCol.appendChild(startPicker);rowEl.appendChild(startCol);
+    // Col 2 — Day name
+    const colDay=div('ts-col-day');
+    colDay.innerHTML=`<span class="ts-day-name">${d.toLocaleDateString([],{weekday:'short'})}</span>`;
+    rowEl.appendChild(colDay);
 
-    // End time
-    const endCol=div('wg-col-time');
-    const endPicker=div('time-picker');
-    const eh=buildSel(HOURS12,row.endH,'tp-sel tp-h',{day,field:'endH'});
-    const em=buildSel(MINS_LIST,row.endM,'tp-sel tp-m',{day,field:'endM'});
-    const ep=buildSel(['AM','PM'],row.endP,'tp-sel tp-ap',{day,field:'endP'});
-    endPicker.append(eh,mkSep(),em,mkSep2(),ep);
-    endCol.appendChild(endPicker);rowEl.appendChild(endCol);
+    // Col 3 — Clock In
+    const colIn=div('ts-col-time');
+    const inPicker=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
+    const sh=buildSel(HOURS12,row.startH,'ts-sel ts-h',{date:dateStr,field:'startH'});
+    const sm=buildSel(MINS_LIST,row.startM,'ts-sel ts-m',{date:dateStr,field:'startM'});
+    const sp=buildSel(['AM','PM'],row.startP,'ts-sel ts-ap',{date:dateStr,field:'startP'});
+    if(!row.enabled){sh.disabled=sm.disabled=sp.disabled=true;}
+    inPicker.append(sh,mkSep(),sm,mkSpace(),sp);
+    colIn.appendChild(inPicker);
+    rowEl.appendChild(colIn);
 
-    // Total — show both number and plain language
-    const totalCol=div('wg-col-total');
+    // Col 4 — Clock Out
+    const colOut=div('ts-col-time');
+    const outPicker=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
+    const eh=buildSel(HOURS12,row.endH,'ts-sel ts-h',{date:dateStr,field:'endH'});
+    const em=buildSel(MINS_LIST,row.endM,'ts-sel ts-m',{date:dateStr,field:'endM'});
+    const ep=buildSel(['AM','PM'],row.endP,'ts-sel ts-ap',{date:dateStr,field:'endP'});
+    if(!row.enabled){eh.disabled=em.disabled=ep.disabled=true;}
+    outPicker.append(eh,mkSep(),em,mkSpace(),ep);
+    colOut.appendChild(outPicker);
+    rowEl.appendChild(colOut);
+
+    // Col 5 — Total
+    const colTotal=div('ts-col-total');
     if(mins>0){
-      totalCol.innerHTML=`<span class="wg-total-num${isOT?' wg-ot':''}">${fmtDur(mins)}</span><span class="wg-total-plain">${plainDur(mins)}</span>`;
+      colTotal.innerHTML=`
+        <span class="ts-total-num${isOT?' ts-ot':''}">${fmtDur(mins)}</span>
+        <span class="ts-total-plain">${plainDur(mins)}</span>`;
+    } else if(row.enabled){
+      colTotal.innerHTML=`<span class="ts-total-zero">0h</span>`;
+    } else {
+      colTotal.innerHTML=`<span class="ts-off-label">—</span>`;
     }
-    rowEl.appendChild(totalCol);
+    rowEl.appendChild(colTotal);
 
-    grid.appendChild(rowEl);
+    sheetCard.appendChild(rowEl);
   });
 
-  // Footer
-  const foot=div('wg-footer');
-  const weeklyTotalMins=totalWeekMins;
-  const weeklyH=weeklyTotalMins/60;
-  const regH=Math.min(weeklyH,otW),otH=Math.max(0,weeklyH-otW);
+  // Footer row
+  const periodH=totalPeriodMins/60;
+  const regH=Math.min(periodH,otW),otH=Math.max(0,periodH-otW);
   const totalPay=regH*rate+otH*rate*1.5;
-  foot.innerHTML=`
-    <div class="wg-col-day"></div>
-    <div class="wg-col-time"></div>
-    <div class="wg-col-time"></div>
-    <div class="wg-col-total wg-footer-total">
-      <span class="wg-footer-label">Weekly Total</span>
-      <span class="wg-footer-num">${weeklyTotalMins>0?fmtDur(weeklyTotalMins):''}</span>
-      ${weeklyTotalMins>0?`<span class="wg-footer-plain">${plainDur(weeklyTotalMins)}</span>`:''}
+  const footLabel=period==='monthly'?'Month Total':period==='biweekly'?'2-Week Total':'Week Total';
+
+  const footRow=div('ts-footer');
+  footRow.innerHTML=`
+    <div class="ts-col-date"></div>
+    <div class="ts-col-day"></div>
+    <div class="ts-col-time"></div>
+    <div class="ts-col-time"></div>
+    <div class="ts-col-total ts-footer-total">
+      <span class="ts-footer-label">${footLabel}</span>
+      <span class="ts-footer-num">${totalPeriodMins>0?fmtDur(totalPeriodMins):'—'}</span>
+      ${totalPeriodMins>0?`<span class="ts-footer-plain">${plainDur(totalPeriodMins)}</span>`:''}
+      ${rate>0&&totalPeriodMins>0?`<span class="ts-footer-pay">${fmtMoney(totalPay)}</span>`:''}
     </div>`;
-  grid.appendChild(foot);
-  gCard.appendChild(grid);
+  sheetCard.appendChild(footRow);
 
   // Action bar
   const actions=div('calc-actions');
   actions.innerHTML=`
     <button class="btn btn-calc-print" id="calc-print">
-      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><rect x="4" y="7" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><path d="M6 7V4h8v3M6 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      PRINT
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><rect x="4" y="7" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><path d="M6 7V4h8v3M6 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>PRINT
     </button>
     <button class="btn btn-calc-action" id="calc-save">
-      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      SAVE WEEK
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>SAVE
     </button>
     <button class="btn btn-calc-action" id="calc-clear">
-      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      CLEAR
+      <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>CLEAR
     </button>
     <div class="calc-wk-total">
-      Weekly Total: <strong>${weeklyTotalMins>0?fmtDur(weeklyTotalMins)+' <span style="color:var(--text-muted);font-weight:400;font-size:0.78rem">— '+plainDur(weeklyTotalMins)+'</span>':''}</strong>
+      ${footLabel}: <strong style="color:var(--green)">${totalPeriodMins>0?fmtDur(totalPeriodMins):'—'}</strong>
+      ${totalPeriodMins>0?`<span class="calc-wk-plain"> — ${plainDur(totalPeriodMins)}</span>`:''}
     </div>`;
-  gCard.appendChild(actions);
-  wrap.appendChild(gCard);
+  sheetCard.appendChild(actions);
+  wrap.appendChild(sheetCard);
 
-  // ── Pay summary card (always visible when there are hours) ──
-  if(weeklyTotalMins>0){
+  // ── Summary card ──
+  if(totalPeriodMins>0){
     const sumCard=div('card');
-    sumCard.innerHTML=`<div class="card-header"><span class="card-title">This week at a glance</span></div>`;
     const sg=div('stat-grid');
     sg.innerHTML=`
-      <div class="stat-card accent"><div class="stat-label">Total worked</div><div class="stat-value">${fmtDur(weeklyTotalMins)}</div><div class="stat-sub">${plainDur(weeklyTotalMins)}</div></div>
+      <div class="stat-card accent"><div class="stat-label">Total worked</div><div class="stat-value">${fmtDur(totalPeriodMins)}</div><div class="stat-sub">${plainDur(totalPeriodMins)}</div></div>
       <div class="stat-card"><div class="stat-label">Regular</div><div class="stat-value">${fmtDur(regH*60)}</div><div class="stat-sub">${rate>0?fmtMoney(regH*rate)+' earned':'up to '+otW+'h/wk'}</div></div>
-      <div class="stat-card ${otH>0?'amber':''}"><div class="stat-label">Overtime</div><div class="stat-value">${otH>0?fmtDur(otH*60):'None'}</div><div class="stat-sub">${otH>0?'over '+otW+'h threshold':'within threshold'}</div></div>
-      ${rate>0?`<div class="stat-card green"><div class="stat-label">Est. pay</div><div class="stat-value">${fmtMoney(totalPay)}</div><div class="stat-sub">${otH>0?'incl. '+fmtMoney(otH*rate*1.5)+' OT':'@ '+fmtMoney(rate)+'/hr'}</div></div>`:''}
-    `;
+      <div class="stat-card ${otH>0?'amber':''}"><div class="stat-label">Overtime</div><div class="stat-value">${otH>0?fmtDur(otH*60):'None'}</div><div class="stat-sub">${otH>0?'over '+otW+'h/wk':'within threshold'}</div></div>
+      ${rate>0?`<div class="stat-card green"><div class="stat-label">Est. pay</div><div class="stat-value">${fmtMoney(totalPay)}</div><div class="stat-sub">${otH>0?'incl. '+fmtMoney(otH*rate*1.5)+' OT':'@ '+fmtMoney(rate)+'/hr'}</div></div>`:''}`;
     sumCard.appendChild(sg);
-
-    // Plain language summary box
     const callout=div('summary-callout');
-    let txt=`You worked <strong>${plainDur(weeklyTotalMins)}</strong> this week`;
+    let txt=`You worked <strong>${plainDur(totalPeriodMins)}</strong> this ${period==='monthly'?'month':'period'}`;
     if(otH>0)txt+=`, including <strong>${plainDur(otH*60)} of overtime</strong>`;
     txt+='.';
     if(rate>0){txt+=` At <strong>${fmtMoney(rate)}/hr</strong>${otH>0?' with overtime at 1.5×':''}, your estimated pay is <strong>${fmtMoney(totalPay)}</strong>.`;}
-    if(weeklyH>=otW)txt+=` You've hit the <strong>${otW}-hour</strong> overtime threshold.`;
     callout.innerHTML=txt;
     sumCard.appendChild(callout);
     wrap.appendChild(sumCard);
   }
 
+  // ── Bind nav ──
+  navBar.querySelector('#cp-prev').addEventListener('click',()=>{state.calcPeriodOffset--;refreshCalcView();});
+  navBar.querySelector('#cp-next').addEventListener('click',()=>{state.calcPeriodOffset++;refreshCalcView();});
+
+  // ── Bind checkboxes ──
+  qsa('.wg-day-check',wrap).forEach(cb=>{
+    cb.addEventListener('change',e=>{
+      const d=e.target.dataset.date;
+      if(!state.dateShifts[d])state.dateShifts[d]={...emptyShiftRow()};
+      state.dateShifts[d].enabled=e.target.checked;
+      refreshCalcView();
+    });
+  });
+
   // ── Bind selects ──
-  qsa('.tp-sel',wrap).forEach(sel=>{
+  qsa('.ts-sel',wrap).forEach(sel=>{
     sel.addEventListener('change',e=>{
-      const {day,field}=e.target.dataset;
-      state.weekShifts[day][field]=e.target.value;
+      const {date,field}=e.target.dataset;
+      if(!date)return;
+      if(!state.dateShifts[date])state.dateShifts[date]={...emptyShiftRow(),enabled:true};
+      state.dateShifts[date][field]=e.target.value;
       refreshCalcView();
     });
   });
@@ -403,18 +479,13 @@ function renderCalculator(){
   // PRINT
   wrap.querySelector('#calc-print').addEventListener('click',()=>window.print());
 
-  // SAVE WEEK — saves each day that has hours as a history entry
+  // SAVE
   wrap.querySelector('#calc-save').addEventListener('click',()=>{
     let saved=0;
-    const today=new Date();const todayDow=today.getDay();
-    // Map Mon..Sun to dates of current week
-    const dayToOffset={Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6,Sun:0};
-    WEEK_KEYS.forEach(day=>{
-      const row=state.weekShifts[day];const mins=calcRowMins(row);if(!mins)return;
-      const targetDow=dayToOffset[day];
-      const diff=targetDow-todayDow;
-      const d=new Date(today);d.setDate(today.getDate()+diff);
-      const dateStr=isoDate(d);
+    dates.forEach(dateStr=>{
+      const row=state.dateShifts[dateStr];
+      if(!row||!row.enabled)return;
+      const mins=calcRowMins(row);if(!mins)return;
       const sm=to24Mins(row.startH,row.startM,row.startP);
       const em=to24Mins(row.endH,row.endM,row.endP);
       const sh=String(Math.floor(sm/60)).padStart(2,'0')+':'+String(sm%60).padStart(2,'0');
@@ -422,19 +493,21 @@ function renderCalculator(){
       saveEntry({id:genId(),clockIn:new Date(dateStr+'T'+sh).toISOString(),clockOut:new Date(dateStr+'T'+eh).toISOString(),durationMins:mins,note:'',source:'manual'});
       saved++;
     });
-    if(saved){showToast(saved+' day'+(saved!==1?'s':'')+' saved to history');}else{showToast('No hours to save');}
+    showToast(saved?saved+' day'+(saved!==1?'s':'')+' saved to history':'Check days on to save');
   });
 
   // CLEAR
   wrap.querySelector('#calc-clear').addEventListener('click',()=>{
-    state.weekShifts=buildEmptyWeek();refreshCalcView();
+    dates.forEach(d=>{delete state.dateShifts[d];});
+    refreshCalcView();
   });
 
   return wrap;
 }
 
 function mkSep(){const s=document.createElement('span');s.className='tp-sep';s.textContent=':';return s;}
-function mkSep2(){const s=document.createElement('span');s.style.width='4px';return s;}
+function mkSpace(){const s=document.createElement('span');s.style.width='5px';s.style.display='inline-block';return s;}
+function mkSep2(){return mkSpace();}
 
 function refreshCalcView(){
   const c=el('tab-content');const y=c.scrollTop;c.innerHTML='';c.appendChild(renderCalculator());c.scrollTop=y;
