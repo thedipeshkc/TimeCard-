@@ -257,308 +257,266 @@ function buildSel(opts,selected,cls,data){
 }
 
 // ════════════════════════════════════════════════════════════════
-//  CALCULATOR TAB — responsive (desktop 5-col, mobile card rows)
+//  CALCULATOR TAB — simple, big, mobile-first
 // ════════════════════════════════════════════════════════════════
 function renderCalculator(){
-  const wrap=document.createElement('div');
-  wrap.className='calc-wrap';
-  const s=state.calcSettings;
-  const rate=parseFloat(s.rate)||0, otW=parseFloat(s.otWeek)||40, otD=parseFloat(s.otDay)||8;
-  const period=s.payPeriod||'weekly';
-  const {dates,start,end}=getCalcDates();
+  const wrap = document.createElement('div');
+  wrap.className = 'calc-wrap';
+  const s = state.calcSettings;
+  const rate = parseFloat(s.rate) || 0;
+  const otW  = parseFloat(s.otWeek) || 40;
+  const otD  = parseFloat(s.otDay)  || 8;
 
-  // ── Settings strip ──
-  const pCard=div('card calc-settings-strip');
-  pCard.innerHTML=`
-    <div class="calc-settings-row">
-      <div class="field"><label>Rate ($/hr)</label>
-        <input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01"/></div>
-      <div class="field"><label>Period</label>
-        <select id="cs-period">
-          <option value="weekly"${period==='weekly'?' selected':''}>Weekly</option>
-          <option value="biweekly"${period==='biweekly'?' selected':''}>Bi-weekly</option>
-          <option value="monthly"${period==='monthly'?' selected':''}>Monthly</option>
-        </select></div>
-      <div class="field"><label>OT after (h/wk)</label>
-        <input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1"/></div>
+  // ── Rate strip ──
+  const rateCard = div('card calc-rate-card');
+  rateCard.innerHTML = `
+    <div class="calc-rate-row">
+      <div class="field">
+        <label>Hourly Rate ($)</label>
+        <input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01" inputmode="decimal"/>
+      </div>
+      <div class="field">
+        <label>OT after (hrs/week)</label>
+        <input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1" inputmode="numeric"/>
+      </div>
     </div>`;
-  ['cs-rate','cs-period','cs-otweek'].forEach(id=>{
-    const inp=pCard.querySelector('#'+id);
-    if(inp) inp.addEventListener('input',()=>{
-      state.calcSettings={...state.calcSettings,
-        rate:pCard.querySelector('#cs-rate')?.value||'',
-        payPeriod:pCard.querySelector('#cs-period')?.value||'weekly',
-        otWeek:parseFloat(pCard.querySelector('#cs-otweek')?.value)||40,
-        otDay:state.calcSettings.otDay||8
-      };
-      state.calcPeriodOffset=0;
-      saveUserSettings(state.calcSettings); refreshCalcView();
-    });
+  rateCard.querySelector('#cs-rate').addEventListener('input', e => {
+    state.calcSettings.rate = e.target.value;
+    saveUserSettings(state.calcSettings);
+    refreshCalcResults();
   });
-  wrap.appendChild(pCard);
-
-  // ── Period nav ──
-  const periodTitle=period==='monthly'
-    ? start.toLocaleDateString([],{month:'long',year:'numeric'})
-    : start.toLocaleDateString([],{month:'short',day:'numeric'})+' – '+end.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
-
-  const navBar=div('calc-period-nav');
-  navBar.innerHTML=`
-    <button class="btn btn-outline btn-sm" id="cp-prev">‹ Prev</button>
-    <div class="cp-label">
-      <span class="cp-period-name">${period==='biweekly'?'Bi-Weekly':period.charAt(0).toUpperCase()+period.slice(1)}</span>
-      <span class="cp-period-dates">${periodTitle}</span>
-    </div>
-    <button class="btn btn-outline btn-sm" id="cp-next">Next ›</button>`;
-  wrap.appendChild(navBar);
-
-  // ── Sheet ──
-  const sheetCard=div('card calc-sheet-card');
-
-  // Desktop header (hidden on mobile via CSS)
-  const hdr=div('ts-header');
-  hdr.innerHTML=`
-    <div class="ts-col-date">Date</div>
-    <div class="ts-col-day">Day</div>
-    <div class="ts-col-time">Clock In</div>
-    <div class="ts-col-time">Clock Out</div>
-    <div class="ts-col-total">Total</div>`;
-  sheetCard.appendChild(hdr);
-
-  const today=todayStr();
-  let totalPeriodMins=0;
-
-  dates.forEach(dateStr=>{
-    if(!state.dateShifts[dateStr]) state.dateShifts[dateStr]={...emptyShiftRow(),enabled:false};
-    const row=state.dateShifts[dateStr];
-    const mins=row.enabled ? calcRowMins(row) : 0;
-    totalPeriodMins+=mins;
-    const dh=mins/60, isOT=mins>0&&dh>otD;
-    const isToday=dateStr===today;
-    const d=new Date(dateStr+'T12:00:00');
-    const isWeekend=d.getDay()===0||d.getDay()===6;
-    const dayShort=d.toLocaleDateString([],{weekday:'short'});
-    const dayFull=d.toLocaleDateString([],{weekday:'long'});
-    const dateDisp=d.toLocaleDateString([],{month:'short',day:'numeric'});
-
-    const rowEl=div('ts-row'+(isToday?' ts-today':'')+(isWeekend?' ts-weekend':'')+(row.enabled?' ts-active':''));
-    rowEl.dataset.date=dateStr;
-
-    // ── DESKTOP columns (shown ≥640px via CSS) ──
-
-    // Col 1 — Date + checkbox
-    const colDate=div('ts-col-date');
-    colDate.innerHTML=`
-      <label class="ts-date-toggle">
-        <input type="checkbox" class="ts-check" data-date="${dateStr}" ${row.enabled?'checked':''}/>
-        <span class="ts-date-num">${dateDisp}</span>
-      </label>`;
-    rowEl.appendChild(colDate);
-
-    // Col 2 — Day
-    const colDay=div('ts-col-day');
-    colDay.innerHTML=`<span class="ts-day-name">${dayShort}</span>`;
-    rowEl.appendChild(colDay);
-
-    // Col 3 — Clock In
-    const colIn=div('ts-col-time');
-    const inPick=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
-    const sh=buildSel(HOURS12,row.startH,'ts-sel ts-h',{date:dateStr,field:'startH'});
-    const sm=buildSel(MINS_LIST,row.startM,'ts-sel ts-m',{date:dateStr,field:'startM'});
-    const sp=buildSel(['AM','PM'],row.startP,'ts-sel ts-ap',{date:dateStr,field:'startP'});
-    if(!row.enabled){sh.disabled=sm.disabled=sp.disabled=true;}
-    inPick.append(sh,mkSep(),sm,mkSpace(),sp);
-    colIn.appendChild(inPick); rowEl.appendChild(colIn);
-
-    // Col 4 — Clock Out
-    const colOut=div('ts-col-time');
-    const outPick=div('ts-picker'+(row.enabled?'':' ts-picker-off'));
-    const eh=buildSel(HOURS12,row.endH,'ts-sel ts-h',{date:dateStr,field:'endH'});
-    const em=buildSel(MINS_LIST,row.endM,'ts-sel ts-m',{date:dateStr,field:'endM'});
-    const ep=buildSel(['AM','PM'],row.endP,'ts-sel ts-ap',{date:dateStr,field:'endP'});
-    if(!row.enabled){eh.disabled=em.disabled=ep.disabled=true;}
-    outPick.append(eh,mkSep(),em,mkSpace(),ep);
-    colOut.appendChild(outPick); rowEl.appendChild(colOut);
-
-    // Col 5 — Total (desktop)
-    const colTot=div('ts-col-total');
-    if(mins>0){
-      colTot.innerHTML=`<span class="ts-total-num${isOT?' ts-ot':''}">${fmtDur(mins)}</span><span class="ts-total-plain">${plainDur(mins)}</span>`;
-    } else if(row.enabled){
-      colTot.innerHTML=`<span class="ts-total-zero">0h</span>`;
-    } else {
-      colTot.innerHTML=`<span class="ts-off-label">—</span>`;
-    }
-    rowEl.appendChild(colTot);
-
-    // ── MOBILE layout (shown <640px via CSS) ──
-    // Top bar: checkbox + date + day name + total
-    const mobHdr=div('ts-mobile-header');
-    const mobToggle=document.createElement('label');
-    mobToggle.className='ts-mobile-toggle';
-    const mobCb=document.createElement('input');
-    mobCb.type='checkbox'; mobCb.className='ts-check'; mobCb.dataset.date=dateStr;
-    if(row.enabled) mobCb.checked=true;
-    const mobCheckDot=div('ts-mobile-check');
-    const mobDateSpan=document.createElement('span');
-    mobDateSpan.className='ts-mobile-date'; mobDateSpan.textContent=dateDisp;
-    const mobDaySpan=document.createElement('span');
-    mobDaySpan.className='ts-mobile-day'; mobDaySpan.textContent=dayFull;
-    mobToggle.append(mobCb, mobCheckDot, mobDateSpan, mobDaySpan);
-    mobHdr.appendChild(mobToggle);
-
-    // Total on right
-    const mobTotWrap=div('');
-    if(mins>0){
-      mobTotWrap.innerHTML=`<span class="ts-mobile-total${isOT?' ts-ot':''}">${fmtDur(mins)}</span><span class="ts-mobile-plain">${plainDur(mins)}</span>`;
-    } else if(!row.enabled){
-      mobTotWrap.innerHTML=`<span class="ts-mobile-off">off</span>`;
-    }
-    mobHdr.appendChild(mobTotWrap);
-    rowEl.appendChild(mobHdr);
-
-    // Time pickers row: IN → OUT (full width, big)
-    const mobTimes=div('ts-mobile-times');
-
-    const mobInLabel=div('ts-mobile-label'); mobInLabel.textContent='IN';
-    const mobInPick=div('ts-mobile-picker'+(row.enabled?'':' ts-mobile-picker-off'));
-    const msh=buildSel(HOURS12,row.startH,'ts-sel ts-h',{date:dateStr,field:'startH'});
-    const msm=buildSel(MINS_LIST,row.startM,'ts-sel ts-m',{date:dateStr,field:'startM'});
-    const msp=buildSel(['AM','PM'],row.startP,'ts-sel ts-ap',{date:dateStr,field:'startP'});
-    if(!row.enabled){msh.disabled=msm.disabled=msp.disabled=true;}
-    mobInPick.append(msh,mkSep(),msm,mkSpace(),msp);
-
-    const mobArrow=div('ts-mobile-arrow'); mobArrow.textContent='→';
-
-    const mobOutLabel=div('ts-mobile-label'); mobOutLabel.textContent='OUT';
-    const mobOutPick=div('ts-mobile-picker'+(row.enabled?'':' ts-mobile-picker-off'));
-    const meh=buildSel(HOURS12,row.endH,'ts-sel ts-h',{date:dateStr,field:'endH'});
-    const mem=buildSel(MINS_LIST,row.endM,'ts-sel ts-m',{date:dateStr,field:'endM'});
-    const mep=buildSel(['AM','PM'],row.endP,'ts-sel ts-ap',{date:dateStr,field:'endP'});
-    if(!row.enabled){meh.disabled=mem.disabled=mep.disabled=true;}
-    mobOutPick.append(meh,mkSep(),mem,mkSpace(),mep);
-
-    mobTimes.append(mobInLabel, mobInPick, mobArrow, mobOutLabel, mobOutPick);
-    rowEl.appendChild(mobTimes);
-
-    sheetCard.appendChild(rowEl);
+  rateCard.querySelector('#cs-otweek').addEventListener('input', e => {
+    state.calcSettings.otWeek = parseFloat(e.target.value) || 40;
+    saveUserSettings(state.calcSettings);
+    refreshCalcResults();
   });
+  wrap.appendChild(rateCard);
 
-  // Footer
-  const periodH=totalPeriodMins/60;
-  const regH=Math.min(periodH,otW), otH=Math.max(0,periodH-otW);
-  const totalPay=regH*rate+otH*rate*1.5;
-  const footLabel=period==='monthly'?'Month Total':period==='biweekly'?'2-Week Total':'Week Total';
+  // ── Day entries ──
+  const entriesCard = div('card calc-entries-card');
+  entriesCard.innerHTML = `<div class="calc-entries-title">Enter your shifts</div>`;
 
-  const footRow=div('ts-footer');
-  footRow.innerHTML=`
-    <div class="ts-col-date"></div>
-    <div class="ts-col-day"></div>
-    <div class="ts-col-time"></div>
-    <div class="ts-col-time"></div>
-    <div class="ts-col-total ts-footer-total">
-      <span class="ts-footer-label">${footLabel}</span>
-      <span class="ts-footer-num">${totalPeriodMins>0?fmtDur(totalPeriodMins):'—'}</span>
-      ${totalPeriodMins>0?`<span class="ts-footer-plain">${plainDur(totalPeriodMins)}</span>`:''}
-      ${rate>0&&totalPeriodMins>0?`<span class="ts-footer-pay">${fmtMoney(totalPay)}</span>`:''}
-    </div>`;
-  sheetCard.appendChild(footRow);
-
-  // Actions
-  const actions=div('calc-actions');
-  actions.innerHTML=`
-    <button class="btn btn-calc-print" id="calc-print">
-      <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><rect x="4" y="7" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><path d="M6 7V4h8v3M6 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>PRINT
-    </button>
-    <button class="btn btn-calc-action" id="calc-save">
-      <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>SAVE
-    </button>
-    <button class="btn btn-calc-action" id="calc-clear">
-      <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>CLEAR
-    </button>
-    <div class="calc-wk-total">
-      ${footLabel}: <strong style="color:var(--green)">${totalPeriodMins>0?fmtDur(totalPeriodMins):'—'}</strong>
-      ${totalPeriodMins>0?`<span class="calc-wk-plain"> — ${plainDur(totalPeriodMins)}</span>`:''}
-    </div>`;
-  sheetCard.appendChild(actions);
-  wrap.appendChild(sheetCard);
-
-  // ── Summary ──
-  if(totalPeriodMins>0){
-    const sumCard=div('card');
-    const sg=div('stat-grid');
-    sg.innerHTML=`
-      <div class="stat-card accent"><div class="stat-label">Total worked</div><div class="stat-value">${fmtDur(totalPeriodMins)}</div><div class="stat-sub">${plainDur(totalPeriodMins)}</div></div>
-      <div class="stat-card"><div class="stat-label">Regular</div><div class="stat-value">${fmtDur(regH*60)}</div><div class="stat-sub">${rate>0?fmtMoney(regH*rate)+' earned':'up to '+otW+'h/wk'}</div></div>
-      <div class="stat-card ${otH>0?'amber':''}"><div class="stat-label">Overtime</div><div class="stat-value">${otH>0?fmtDur(otH*60):'None'}</div><div class="stat-sub">${otH>0?'over '+otW+'h/wk':'within threshold'}</div></div>
-      ${rate>0?`<div class="stat-card green"><div class="stat-label">Est. pay</div><div class="stat-value">${fmtMoney(totalPay)}</div><div class="stat-sub">${otH>0?'incl. '+fmtMoney(otH*rate*1.5)+' OT':'@ '+fmtMoney(rate)+'/hr'}</div></div>`:''}`;
-    sumCard.appendChild(sg);
-    const callout=div('summary-callout');
-    let txt=`You worked <strong>${plainDur(totalPeriodMins)}</strong> this ${period==='monthly'?'month':'period'}`;
-    if(otH>0) txt+=`, including <strong>${plainDur(otH*60)} of overtime</strong>`;
-    txt+='.';
-    if(rate>0){txt+=` At <strong>${fmtMoney(rate)}/hr</strong>${otH>0?' with overtime at 1.5×':''}, your estimated pay is <strong>${fmtMoney(totalPay)}</strong>.`;}
-    callout.innerHTML=txt;
-    sumCard.appendChild(callout);
-    wrap.appendChild(sumCard);
+  // Each entry is: date + IN time + OUT time + computed total
+  if (!state.calcEntries || state.calcEntries.length === 0) {
+    state.calcEntries = [makeCalcEntry()];
   }
 
-  // ── Bindings ──
-  navBar.querySelector('#cp-prev').addEventListener('click',()=>{state.calcPeriodOffset--;refreshCalcView();});
-  navBar.querySelector('#cp-next').addEventListener('click',()=>{state.calcPeriodOffset++;refreshCalcView();});
+  state.calcEntries.forEach((entry, idx) => {
+    const mins = computeEntryMins(entry);
+    const entryDiv = div('calc-entry-card' + (mins > 0 ? ' has-hours' : ''));
+    entryDiv.dataset.idx = idx;
 
-  // All checkboxes (desktop + mobile both rendered — bind by class)
-  qsa('.ts-check',wrap).forEach(cb=>{
-    cb.addEventListener('change',e=>{
-      const d=e.target.dataset.date;
-      if(!state.dateShifts[d]) state.dateShifts[d]={...emptyShiftRow()};
-      state.dateShifts[d].enabled=e.target.checked;
-      refreshCalcView();
-    });
+    const d = entry.date ? new Date(entry.date + 'T12:00:00') : null;
+    const dayName = d ? d.toLocaleDateString([], {weekday:'long'}) : '';
+
+    entryDiv.innerHTML = `
+      <div class="ce-top-row">
+        <div class="ce-date-wrap">
+          <label class="ce-label">Date</label>
+          <input type="date" class="ce-date big-input" value="${entry.date||''}" data-idx="${idx}"/>
+          ${dayName ? `<div class="ce-dayname">${dayName}</div>` : ''}
+        </div>
+        <button class="ce-remove-btn" data-idx="${idx}" title="Remove">×</button>
+      </div>
+      <div class="ce-times-row">
+        <div class="ce-time-group">
+          <label class="ce-label">Clock In</label>
+          <div class="ce-time-picker">
+            ${buildTimePickerHTML('in', idx, entry.inH, entry.inM, entry.inP)}
+          </div>
+        </div>
+        <div class="ce-arrow">→</div>
+        <div class="ce-time-group">
+          <label class="ce-label">Clock Out</label>
+          <div class="ce-time-picker">
+            ${buildTimePickerHTML('out', idx, entry.outH, entry.outM, entry.outP)}
+          </div>
+        </div>
+      </div>
+      <div class="ce-result">
+        ${mins > 0
+          ? `<span class="ce-result-num${mins/60 > otD ? ' ce-ot' : ''}">${fmtDur(mins)}</span>
+             <span class="ce-result-plain">${plainDur(mins)}</span>
+             ${rate > 0 ? `<span class="ce-result-pay">${fmtMoney(mins/60*rate)}</span>` : ''}`
+          : `<span class="ce-result-empty">Fill in times above</span>`}
+      </div>`;
+    entriesCard.appendChild(entryDiv);
   });
 
-  // All time selects
-  qsa('.ts-sel',wrap).forEach(sel=>{
-    sel.addEventListener('change',e=>{
-      const {date,field}=e.target.dataset;
-      if(!date) return;
-      if(!state.dateShifts[date]) state.dateShifts[date]={...emptyShiftRow(),enabled:true};
-      state.dateShifts[date][field]=e.target.value;
-      refreshCalcView();
-    });
-  });
-
-  wrap.querySelector('#calc-print').addEventListener('click',()=>window.print());
-  wrap.querySelector('#calc-save').addEventListener('click',()=>{
-    let saved=0;
-    dates.forEach(dateStr=>{
-      const row=state.dateShifts[dateStr];
-      if(!row||!row.enabled) return;
-      const mins=calcRowMins(row); if(!mins) return;
-      const sm=to24Mins(row.startH,row.startM,row.startP);
-      const em=to24Mins(row.endH,row.endM,row.endP);
-      const sh=String(Math.floor(sm/60)).padStart(2,'0')+':'+String(sm%60).padStart(2,'0');
-      const eh=String(Math.floor(em/60)).padStart(2,'0')+':'+String(em%60).padStart(2,'0');
-      saveEntry({id:genId(),clockIn:new Date(dateStr+'T'+sh).toISOString(),clockOut:new Date(dateStr+'T'+eh).toISOString(),durationMins:mins,note:'',source:'manual'});
-      saved++;
-    });
-    showToast(saved?saved+' day'+(saved!==1?'s':'')+' saved':'Check days on to save');
-  });
-  wrap.querySelector('#calc-clear').addEventListener('click',()=>{
-    dates.forEach(d=>{delete state.dateShifts[d];});
+  // Add entry button
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn calc-add-btn';
+  addBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Add another day`;
+  addBtn.addEventListener('click', () => {
+    state.calcEntries.push(makeCalcEntry());
     refreshCalcView();
+  });
+  entriesCard.appendChild(addBtn);
+  wrap.appendChild(entriesCard);
+
+  // ── Summary ──
+  const allMins = (state.calcEntries || []).reduce((s, e) => s + computeEntryMins(e), 0);
+  if (allMins > 0) {
+    const totalH = allMins / 60;
+    const regH   = Math.min(totalH, otW);
+    const otH    = Math.max(0, totalH - otW);
+    const totalPay = regH * rate + otH * rate * 1.5;
+
+    const sumCard = div('card calc-summary-card');
+    sumCard.innerHTML = `
+      <div class="calc-sum-big">
+        <div class="calc-sum-hours">${fmtDur(allMins)}</div>
+        <div class="calc-sum-plain">${plainDur(allMins)}</div>
+      </div>
+      <div class="calc-sum-grid">
+        <div class="calc-sum-item">
+          <span class="csi-label">Regular</span>
+          <span class="csi-val">${fmtDur(regH * 60)}</span>
+          ${rate > 0 ? `<span class="csi-pay">${fmtMoney(regH * rate)}</span>` : ''}
+        </div>
+        <div class="calc-sum-item ${otH > 0 ? 'is-ot' : ''}">
+          <span class="csi-label">Overtime</span>
+          <span class="csi-val">${otH > 0 ? fmtDur(otH * 60) : 'None'}</span>
+          ${rate > 0 && otH > 0 ? `<span class="csi-pay">${fmtMoney(otH * rate * 1.5)} (1.5×)</span>` : ''}
+        </div>
+        ${rate > 0 ? `
+        <div class="calc-sum-item is-pay">
+          <span class="csi-label">Total pay</span>
+          <span class="csi-val">${fmtMoney(totalPay)}</span>
+          <span class="csi-pay">@ ${fmtMoney(rate)}/hr</span>
+        </div>` : ''}
+      </div>
+      <div class="summary-callout" style="margin-top:1rem">
+        ${buildCalcSummaryText(allMins, otH, rate, totalPay, otW)}
+      </div>
+      <div class="calc-save-row">
+        <button class="btn btn-primary calc-save-btn" id="calc-save-btn">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Save to history
+        </button>
+        <button class="btn btn-calc-action" id="calc-clear-btn">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Clear all
+        </button>
+      </div>`;
+    wrap.appendChild(sumCard);
+
+    sumCard.querySelector('#calc-save-btn').addEventListener('click', () => {
+      let saved = 0;
+      (state.calcEntries || []).forEach(entry => {
+        const mins = computeEntryMins(entry);
+        if (!mins || !entry.date) return;
+        const sm = to24Mins(entry.inH, entry.inM, entry.inP);
+        const em = to24Mins(entry.outH, entry.outM, entry.outP);
+        const sh = String(Math.floor(sm/60)).padStart(2,'0') + ':' + String(sm%60).padStart(2,'0');
+        const eh = String(Math.floor(em/60)).padStart(2,'0') + ':' + String(em%60).padStart(2,'0');
+        saveEntry({id:genId(), clockIn:new Date(entry.date+'T'+sh).toISOString(), clockOut:new Date(entry.date+'T'+eh).toISOString(), durationMins:mins, note:'', source:'manual'});
+        saved++;
+      });
+      showToast(saved ? saved + ' shift' + (saved !== 1 ? 's' : '') + ' saved!' : 'Nothing to save');
+    });
+
+    sumCard.querySelector('#calc-clear-btn').addEventListener('click', () => {
+      state.calcEntries = [makeCalcEntry()];
+      refreshCalcView();
+    });
+  } else {
+    // Clear button even when no results
+    const clearWrap = div('calc-clear-wrap');
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn btn-calc-action';
+    clearBtn.innerHTML = 'Clear all';
+    clearBtn.addEventListener('click', () => { state.calcEntries = [makeCalcEntry()]; refreshCalcView(); });
+    clearWrap.appendChild(clearBtn);
+    wrap.appendChild(clearWrap);
+  }
+
+  // ── Bind all events ──
+  // Date inputs
+  qsa('.ce-date', wrap).forEach(inp => {
+    inp.addEventListener('change', e => {
+      const idx = parseInt(e.target.dataset.idx);
+      state.calcEntries[idx].date = e.target.value;
+      refreshCalcView();
+    });
+  });
+
+  // Time selects
+  qsa('.ce-sel', wrap).forEach(sel => {
+    sel.addEventListener('change', e => {
+      const {idx, field} = e.target.dataset;
+      state.calcEntries[parseInt(idx)][field] = e.target.value;
+      refreshCalcResults();
+    });
+  });
+
+  // Remove buttons
+  qsa('.ce-remove-btn', wrap).forEach(btn => {
+    btn.addEventListener('click', e => {
+      const idx = parseInt(e.target.dataset.idx);
+      if (state.calcEntries.length === 1) {
+        state.calcEntries = [makeCalcEntry()];
+      } else {
+        state.calcEntries.splice(idx, 1);
+      }
+      refreshCalcView();
+    });
   });
 
   return wrap;
 }
 
-function mkSep(){const s=document.createElement('span');s.className='tp-sep';s.textContent=':';return s;}
-function mkSpace(){const s=document.createElement('span');s.style.cssText='width:4px;display:inline-block;flex-shrink:0';return s;}
-function mkSep2(){return mkSpace();}
-
-function refreshCalcView(){
-  const c=el('tab-content');const y=c.scrollTop;c.innerHTML='';c.appendChild(renderCalculator());c.scrollTop=y;
+function buildTimePickerHTML(type, idx, h, m, p) {
+  const prefix = type === 'in' ? 'in' : 'out';
+  const hField = prefix + 'H';
+  const mField = prefix + 'M';
+  const pField = prefix + 'P';
+  const hOpts  = HOURS12.map(o => `<option value="${o}"${String(o)===String(h)?'selected':''}>${o}</option>`).join('');
+  const mOpts  = MINS_LIST.map(o => `<option value="${o}"${String(o)===String(m)?'selected':''}>${o}</option>`).join('');
+  const pOpts  = ['AM','PM'].map(o => `<option value="${o}"${o===p?'selected':''}>${o}</option>`).join('');
+  return `
+    <select class="ce-sel ce-h" data-idx="${idx}" data-field="${hField}">${hOpts}</select>
+    <span class="ce-colon">:</span>
+    <select class="ce-sel ce-m" data-idx="${idx}" data-field="${mField}">${mOpts}</select>
+    <select class="ce-sel ce-ap" data-idx="${idx}" data-field="${pField}">${pOpts}</select>`;
 }
+
+function makeCalcEntry() {
+  return { date: todayStr(), inH:'9', inM:'00', inP:'AM', outH:'5', outM:'00', outP:'PM' };
+}
+
+function computeEntryMins(entry) {
+  if (!entry.inH || !entry.outH) return 0;
+  let s = to24Mins(entry.inH, entry.inM, entry.inP);
+  let e = to24Mins(entry.outH, entry.outM, entry.outP);
+  if (e <= s) e += 1440;
+  return Math.max(0, e - s);
+}
+
+function buildCalcSummaryText(totalMins, otH, rate, totalPay, otW) {
+  let t = `You worked <strong>${plainDur(totalMins)}</strong>`;
+  if (otH > 0) t += `, including <strong>${plainDur(otH * 60)} of overtime</strong>`;
+  t += '.';
+  if (rate > 0) t += ` At <strong>${fmtMoney(rate)}/hr</strong>${otH > 0 ? ' with overtime at 1.5×' : ''}, your estimated pay is <strong>${fmtMoney(totalPay)}</strong>.`;
+  return t;
+}
+
+function refreshCalcResults() {
+  // Cheap refresh — only update result rows without full re-render
+  refreshCalcView();
+}
+
+function refreshCalcView() {
+  const c = el('tab-content');
+  const y = c.scrollTop;
+  c.innerHTML = '';
+  c.appendChild(renderCalculator());
+  c.scrollTop = y;
+}
+
+function mkSep()  { const s=document.createElement('span'); s.className='tp-sep'; s.textContent=':'; return s; }
+function mkSpace(){ const s=document.createElement('span'); s.style.cssText='width:4px;display:inline-block;flex-shrink:0'; return s; }
+function mkSep2() { return mkSpace(); }
 
 // ════════════════════════════════════════════════════════════════
 //  CALENDAR TAB — click any day to view/edit hours
