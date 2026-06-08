@@ -1,971 +1,759 @@
-/* ─────────────────────────────────────────────────────────────
-   TimeCard — app.js
-   ───────────────────────────────────────────────────────────── */
 'use strict';
+/* ── TimeCard app.js ── */
 
-const DB_KEY    = 'timecard_v4';
+const DB_KEY    = 'timecard_v5';
 const MONTHS    = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const MONTHS_S  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const DAYS      = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const DAYS_LONG = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const WEEK_KEYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const WEEK_FULL = {Mon:'Monday',Tue:'Tuesday',Wed:'Wednesday',Thu:'Thursday',Fri:'Friday',Sat:'Saturday',Sun:'Sunday'};
-const TAB_TITLES= {calculator:'Calculator',timecard:'Time Card',calendar:'Calendar',history:'History',settings:'Settings'};
+const DAYS_S    = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const HOURS12   = ['1','2','3','4','5','6','7','8','9','10','11','12'];
-const MINS_LIST = Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
+const MINS      = Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
+const TAB_TITLES = {calculator:'Calculator',history:'History',calendar:'Calendar',settings:'Settings'};
 
-// ── State ──────────────────────────────────────────────────────
-let state = {
-  user:null, users:{}, tab:'calculator',
-  dateShifts:{},
-  calcSettings:{rate:'',otWeek:40,otDay:8,payPeriod:'weekly',employeeName:'',payPeriodLabel:''},
-  calcPeriodOffset:0,
-  clockInTime:null, clockTimer:null,
-  calYear:new Date().getFullYear(), calMonth:new Date().getMonth()+1,
-  calSelectedDate:null,
-  histFilter:'all',
-  weekOffset:0, tcView:'weekly',
-  loginMode:'login', loginError:'',
-  rangeFrom:'', rangeTo:'',
+// ── State ─────────────────────────────────────────────────────
+let S = {
+  user: null, users: {}, tab: 'calculator',
+  // Calculator: list of shift rows
+  rows: [ mkRow() ],
+  settings: { rate:'', otWeek:40 },
+  // Clock-in
+  clockIn: null, clockTimer: null,
+  // Calendar
+  calY: new Date().getFullYear(), calM: new Date().getMonth()+1,
+  calSel: null,
+  // History
+  histFilter: 'all',
+  rangeFrom: '', rangeTo: '',
+  // Login
+  loginMode: 'login', loginError: '',
 };
 
-function emptyShiftRow(){ return {startH:'9',startM:'00',startP:'AM',endH:'5',endM:'00',endP:'PM'}; }
-
-function getCalcDates(){
-  const period=state.calcSettings.payPeriod||'weekly';
-  const today=new Date();
-  const offset=state.calcPeriodOffset;
-  let start,end;
-  if(period==='weekly'){
-    const dow=today.getDay();const diffToMon=dow===0?-6:1-dow;
-    start=new Date(today);start.setDate(today.getDate()+diffToMon+offset*7);start.setHours(0,0,0,0);
-    end=new Date(start);end.setDate(start.getDate()+6);
-  } else if(period==='biweekly'){
-    const dow=today.getDay();const diffToMon=dow===0?-6:1-dow;
-    start=new Date(today);start.setDate(today.getDate()+diffToMon+offset*14);start.setHours(0,0,0,0);
-    end=new Date(start);end.setDate(start.getDate()+13);
-  } else {
-    const d=new Date(today.getFullYear(),today.getMonth()+offset,1);
-    start=new Date(d);start.setHours(0,0,0,0);
-    end=new Date(d.getFullYear(),d.getMonth()+1,0);end.setHours(23,59,59,999);
-  }
-  const dates=[];let cur=new Date(start);
-  while(cur<=end){dates.push(isoDate(cur));cur=new Date(cur);cur.setDate(cur.getDate()+1);}
-  return {dates,start,end};
+function mkRow(){
+  return { id: genId(), date: todayStr(), inH:'9', inM:'00', inP:'AM', outH:'5', outM:'00', outP:'PM' };
 }
 
-// ── DB ─────────────────────────────────────────────────────────
-function loadDB(){try{const d=JSON.parse(localStorage.getItem(DB_KEY)||'{}');if(d.users)state.users=d.users;}catch(e){}}
-function saveDB(){try{localStorage.setItem(DB_KEY,JSON.stringify({users:state.users}));}catch(e){}}
-function getEntries(){return state.users[state.user]?.entries||[];}
-function saveEntry(entry){
-  if(!state.users[state.user])state.users[state.user]={entries:[]};
-  const arr=state.users[state.user].entries;
-  const i=arr.findIndex(e=>e.id===entry.id);
-  if(i>=0)arr[i]=entry; else arr.push(entry);
+// ── DB ────────────────────────────────────────────────────────
+function loadDB(){ try{ const d=JSON.parse(localStorage.getItem(DB_KEY)||'{}'); if(d.users) S.users=d.users; }catch(e){} }
+function saveDB(){ try{ localStorage.setItem(DB_KEY,JSON.stringify({users:S.users})); }catch(e){} }
+function getEntries(){ return S.users[S.user]?.entries||[]; }
+function upsertEntry(e){
+  if(!S.users[S.user]) S.users[S.user]={entries:[]};
+  const arr=S.users[S.user].entries;
+  const i=arr.findIndex(x=>x.id===e.id);
+  if(i>=0) arr[i]=e; else arr.push(e);
   saveDB();
 }
-function deleteEntry(id){const u=state.users[state.user];if(u)u.entries=u.entries.filter(e=>e.id!==id);saveDB();}
-function getUserSettings(){return state.users[state.user]?.settings||{rate:'',otWeek:40,otDay:8,payPeriod:'weekly'};}
-function saveUserSettings(s){if(!state.users[state.user])state.users[state.user]={entries:[]};state.users[state.user].settings=s;saveDB();}
+function removeEntry(id){ const u=S.users[S.user]; if(u) u.entries=u.entries.filter(e=>e.id!==id); saveDB(); }
+function getSettings(){ return S.users[S.user]?.settings||{rate:'',otWeek:40}; }
+function saveSettings(s){ if(!S.users[S.user]) S.users[S.user]={entries:[]}; S.users[S.user].settings=s; saveDB(); }
 
-// ── Utils ──────────────────────────────────────────────────────
-function genId(){return Date.now()+'-'+(Math.random()*9999|0);}
-function todayStr(){return new Date().toISOString().split('T')[0];}
-function hashPass(p){let h=0;for(let i=0;i<p.length;i++){h=((h<<5)-h)+p.charCodeAt(i);h|=0;}return h.toString(36);}
-function el(id){return document.getElementById(id);}
-function qs(sel,ctx){return(ctx||document).querySelector(sel);}
-function qsa(sel,ctx){return[...(ctx||document).querySelectorAll(sel)];}
-function fmt(n,d=2){return parseFloat(n).toFixed(d);}
-function fmtMoney(n){return'$'+parseFloat(n).toFixed(2);}
-function initials(n){return n.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
-function div(cls,html){const d=document.createElement('div');d.className=cls;if(html!=null)d.innerHTML=html;return d;}
+// ── Utils ─────────────────────────────────────────────────────
+function genId(){ return Date.now()+'-'+(Math.random()*99999|0); }
+function todayStr(){ return new Date().toISOString().split('T')[0]; }
+function hashPass(p){ let h=0; for(let i=0;i<p.length;i++){h=((h<<5)-h)+p.charCodeAt(i);h|=0;} return h.toString(36); }
+function $id(id){ return document.getElementById(id); }
+function $$(sel,ctx){ return [...(ctx||document).querySelectorAll(sel)]; }
+function div(cls,html){ const d=document.createElement('div'); d.className=cls; if(html!=null) d.innerHTML=html; return d; }
+function initials(n){ return n.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2); }
+function isoDate(d){ return d.toISOString().split('T')[0]; }
 
+function to24(h,m,ap){
+  let hh=parseInt(h)||0, mm=parseInt(m)||0;
+  if(ap==='AM'){ if(hh===12) hh=0; } else { if(hh!==12) hh+=12; }
+  return hh*60+mm;
+}
+function rowMins(r){
+  if(!r.inH||!r.outH) return 0;
+  let s=to24(r.inH,r.inM,r.inP), e=to24(r.outH,r.outM,r.outP);
+  if(e<=s) e+=1440;
+  return Math.max(0,e-s);
+}
+function fmt12(totalMins){
+  let h=Math.floor(totalMins/60)%24, m=totalMins%60;
+  const ap=h<12?'AM':'PM';
+  if(h===0)h=12; else if(h>12)h-=12;
+  return h+':'+(String(m).padStart(2,'0'))+' '+ap;
+}
 function fmtDur(m){
-  if(!m||m<=0)return'—';
-  const h=Math.floor(m/60),mn=Math.round(m%60);
-  if(h===0)return mn+'m';
-  if(mn===0)return h+'h';
+  if(!m||m<=0) return '0m';
+  const h=Math.floor(m/60), mn=Math.round(m%60);
+  if(h===0) return mn+'m';
+  if(mn===0) return h+'h';
   return h+'h '+mn+'m';
 }
 function plainDur(m){
-  if(!m||m<=0)return'no time logged';
-  const h=Math.floor(m/60),mn=Math.round(m%60);
-  if(h===0)return mn+' minute'+(mn!==1?'s':'');
-  if(mn===0)return h+' hour'+(h!==1?'s':'');
-  return h+' hour'+(h!==1?'s':'')+' and '+mn+' minute'+(mn!==1?'s':'');
+  if(!m||m<=0) return 'no time';
+  const h=Math.floor(m/60), mn=Math.round(m%60);
+  if(h===0) return mn+' min';
+  if(mn===0) return h+' hr'+(h!==1?'s':'');
+  return h+' hr'+(h!==1?'s':'')+' '+mn+' min';
 }
-function fmt12(totalMins){
-  if(totalMins<0)totalMins+=1440;
-  let h=Math.floor(totalMins/60)%24,m=totalMins%60;
-  const ap=h<12?'AM':'PM';
-  if(h===0)h=12;else if(h>12)h-=12;
-  return h+':'+(String(m).padStart(2,'0'))+' '+ap;
-}
-function to24Mins(h,m,ap){
-  let hh=parseInt(h)||0,mm=parseInt(m)||0;
-  if(ap==='AM'){if(hh===12)hh=0;}else{if(hh!==12)hh+=12;}
-  return hh*60+mm;
-}
-function calcRowMins(row){
-  if(!row.startH||!row.endH)return 0;
-  let s=to24Mins(row.startH,row.startM,row.startP);
-  let e=to24Mins(row.endH,row.endM,row.endP);
-  if(e<=s)e+=1440;
-  return Math.max(0,e-s);
-}
+function fmtMoney(n){ return '$'+parseFloat(n).toFixed(2); }
 function fmtElapsed(ms){
   const s=Math.floor(ms/1000),h=Math.floor(s/3600),min=Math.floor((s%3600)/60),sec=s%60;
-  return(h?h+':':'')+(String(min).padStart(h?2:1,'0'))+':'+(String(sec).padStart(2,'0'));
-}
-function dateLabel(d){return new Date(d+'T12:00:00').toLocaleDateString([],{weekday:'short',month:'short',day:'numeric',year:'numeric'});}
-function isoDate(d){return d.toISOString().split('T')[0];}
-
-// entries for a specific date string
-function entriesForDate(dateStr){
-  return getEntries().filter(e=>new Date(e.clockIn).toISOString().split('T')[0]===dateStr);
-}
-function minsForDate(dateStr){
-  return entriesForDate(dateStr).reduce((s,e)=>s+(e.durationMins||0),0);
+  return (h?h+':':'')+(String(min).padStart(h?2:1,'0'))+':'+(String(sec).padStart(2,'0'));
 }
 
-// ── Clock-in ───────────────────────────────────────────────────
-function startClockTimer(){if(state.clockTimer)clearInterval(state.clockTimer);state.clockTimer=setInterval(updateClockDisplay,1000);updateClockDisplay();}
-function stopClockTimer(){if(state.clockTimer){clearInterval(state.clockTimer);state.clockTimer=null;}}
-function updateClockDisplay(){
-  const te=el('clockin-timer'),le=el('clockin-label'),dot=qs('.pulse-dot'),btn=el('btn-clockin');
-  if(state.clockInTime){
-    if(te)te.textContent=fmtElapsed(Date.now()-state.clockInTime);
-    if(le)le.textContent='Clocked in';
-    if(dot)dot.classList.add('active');
-    if(btn){btn.textContent='Clock Out';btn.classList.add('clocked-in');}
-  }else{
-    if(te)te.textContent='';
-    if(le)le.textContent='Not clocked in';
-    if(dot)dot.classList.remove('active');
-    if(btn){btn.textContent='Clock In';btn.classList.remove('clocked-in');}
+// ── Time select builder ───────────────────────────────────────
+function timeSel(opts, val, cls, data){
+  const s=document.createElement('select');
+  s.className='ts '+cls;
+  if(data) Object.entries(data).forEach(([k,v])=>s.dataset[k]=v);
+  opts.forEach(o=>{ const op=document.createElement('option'); op.value=o; op.textContent=o; if(String(o)===String(val)) op.selected=true; s.appendChild(op); });
+  return s;
+}
+
+// ── Clock-in ──────────────────────────────────────────────────
+function startTimer(){ if(S.clockTimer) clearInterval(S.clockTimer); S.clockTimer=setInterval(tickClock,1000); tickClock(); }
+function stopTimer(){  if(S.clockTimer){ clearInterval(S.clockTimer); S.clockTimer=null; } }
+function tickClock(){
+  const te=$id('ci-timer'), le=$id('ci-label'), dot=document.querySelector('.pulse-dot'), btn=$id('btn-ci');
+  if(S.clockIn){
+    if(te) te.textContent=fmtElapsed(Date.now()-S.clockIn);
+    if(le) le.textContent='Clocked in';
+    if(dot) dot.classList.add('active');
+    if(btn){ btn.textContent='Clock Out'; btn.classList.add('clocked-in'); }
+  } else {
+    if(te) te.textContent='';
+    if(le) le.textContent='Not clocked in';
+    if(dot) dot.classList.remove('active');
+    if(btn){ btn.textContent='Clock In'; btn.classList.remove('clocked-in'); }
   }
 }
-function handleClockToggle(){
-  if(!state.clockInTime){state.clockInTime=Date.now();startClockTimer();}
-  else{
-    const out=Date.now(),mins=Math.round((out-state.clockInTime)/60000);
-    saveEntry({id:genId(),clockIn:new Date(state.clockInTime).toISOString(),clockOut:new Date(out).toISOString(),durationMins:mins,note:'',source:'clockin'});
-    state.clockInTime=null;stopClockTimer();updateClockDisplay();
-    showToast('Shift saved — '+plainDur(mins));
-    if(state.tab==='history'||state.tab==='calendar')renderTab();
+function toggleClock(){
+  if(!S.clockIn){ S.clockIn=Date.now(); startTimer(); }
+  else {
+    const out=Date.now(), mins=Math.round((out-S.clockIn)/60000);
+    upsertEntry({id:genId(),clockIn:new Date(S.clockIn).toISOString(),clockOut:new Date(out).toISOString(),durationMins:mins,note:'',source:'clockin'});
+    S.clockIn=null; stopTimer(); tickClock();
+    toast('Shift saved — '+plainDur(mins));
+    if(S.tab==='history'||S.tab==='calendar') renderTab();
   }
 }
 
-// ── Live clock ─────────────────────────────────────────────────
-function startLiveClock(){
-  function tick(){const c=el('live-clock');if(!c)return;const n=new Date();let h=n.getHours(),m=n.getMinutes(),s=n.getSeconds();const ap=h<12?'AM':'PM';if(h===0)h=12;else if(h>12)h-=12;c.textContent=h+':'+(String(m).padStart(2,'0'))+':'+(String(s).padStart(2,'0'))+' '+ap;}
-  tick();setInterval(tick,1000);
+// ── Live clock ────────────────────────────────────────────────
+function startClock(){
+  function tick(){
+    const c=$id('live-clock'); if(!c) return;
+    const n=new Date(); let h=n.getHours(),m=n.getMinutes(),s=n.getSeconds();
+    const ap=h<12?'AM':'PM'; if(h===0)h=12; else if(h>12)h-=12;
+    c.textContent=h+':'+(String(m).padStart(2,'0'))+':'+(String(s).padStart(2,'0'))+' '+ap;
+  }
+  tick(); setInterval(tick,1000);
 }
 
-// ── Toast ──────────────────────────────────────────────────────
-let _toastTimer=null;
-function showToast(msg){
-  let t=el('toast');
-  if(!t){t=document.createElement('div');t.id='toast';t.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 18px;border-radius:10px;font-size:0.8rem;font-weight:500;transition:all 0.25s ease;pointer-events:none;background:var(--bg-overlay);border:1px solid var(--border-mid);color:var(--text-primary);font-family:var(--font-sans)';document.body.appendChild(t);}
-  t.textContent=msg;t.style.opacity='1';t.style.transform='translateY(0)';
-  if(_toastTimer)clearTimeout(_toastTimer);
-  _toastTimer=setTimeout(()=>{t.style.opacity='0';t.style.transform='translateY(8px)';},2800);
+// ── Toast ─────────────────────────────────────────────────────
+let _tt=null;
+function toast(msg){
+  let t=$id('toast');
+  if(!t){ t=document.createElement('div'); t.id='toast'; t.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;padding:10px 18px;border-radius:10px;font-size:0.82rem;font-weight:500;transition:all 0.25s;pointer-events:none;background:var(--bg-overlay);border:1px solid var(--border-mid);color:var(--text-primary);font-family:var(--font-sans)'; document.body.appendChild(t); }
+  t.textContent=msg; t.style.opacity='1'; t.style.transform='translateY(0)';
+  if(_tt) clearTimeout(_tt);
+  _tt=setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateY(8px)'; },2800);
 }
 
-// ── CSV Export ─────────────────────────────────────────────────
+// ── Export CSV ────────────────────────────────────────────────
 function exportCSV(){
-  const entries=getEntries();if(!entries.length){showToast('No entries to export');return;}
-  const sets=getUserSettings(),rate=parseFloat(sets.rate)||0;
+  const entries=getEntries(); if(!entries.length){ toast('No entries to export'); return; }
+  const sets=getSettings(), rate=parseFloat(sets.rate)||0;
   const rows=[['Date','Day','Clock In','Clock Out','Hours','Minutes','Note',rate?'Pay ($)':''].filter(Boolean)];
   [...entries].sort((a,b)=>new Date(a.clockIn)-new Date(b.clockIn)).forEach(e=>{
-    const ci=new Date(e.clockIn),co=new Date(e.clockOut);
+    const ci=new Date(e.clockIn), co=new Date(e.clockOut);
     const row=[ci.toLocaleDateString(),DAYS_LONG[ci.getDay()],fmt12(ci.getHours()*60+ci.getMinutes()),fmt12(co.getHours()*60+co.getMinutes()),(e.durationMins/60).toFixed(2),e.durationMins,e.note||''];
-    if(rate)row.push((e.durationMins/60*rate).toFixed(2));
+    if(rate) row.push((e.durationMins/60*rate).toFixed(2));
     rows.push(row);
   });
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
   const blob=new Blob([csv],{type:'text/csv'});
   const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download='timecard-export.csv';a.click();
-  URL.revokeObjectURL(url);showToast('CSV exported');
+  const a=document.createElement('a'); a.href=url; a.download='timecard.csv'; a.click();
+  URL.revokeObjectURL(url); toast('Exported!');
 }
 
-// ── Auth ───────────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────
 function renderLogin(){
-  el('login-screen').classList.remove('hidden');el('app').classList.add('hidden');
-  const isLogin=state.loginMode==='login';
-  el('login-title').textContent=isLogin?'Welcome back':'Create account';
-  el('login-sub').textContent=isLogin?'Sign in to continue tracking your hours.':'Start tracking your work hours for free.';
-  el('login-submit').textContent=isLogin?'Sign in':'Create account';
-  el('login-submit').className='btn btn-primary btn-full';
-  const err=el('login-error');err.classList.toggle('hidden',!state.loginError);err.textContent=state.loginError||'';
-  el('login-fields').innerHTML=`
-    ${!isLogin?`<div class="field"><label>Full name</label><input id="li-name" type="text" placeholder="Your name" autocomplete="name"/></div>`:''}
+  $id('login-screen').classList.remove('hidden');
+  $id('app').classList.add('hidden');
+  const isLogin=S.loginMode==='login';
+  $id('login-title').textContent=isLogin?'Welcome back':'Create account';
+  $id('login-sub').textContent=isLogin?'Sign in to track your hours.':'Free account — everything stays on your device.';
+  $id('login-submit').textContent=isLogin?'Sign in':'Create account';
+  const err=$id('login-error'); err.classList.toggle('hidden',!S.loginError); err.textContent=S.loginError||'';
+  $id('login-fields').innerHTML=`
+    ${!isLogin?`<div class="field"><label>Your name</label><input id="li-name" type="text" placeholder="Full name" autocomplete="name"/></div>`:''}
     <div class="field"><label>Email</label><input id="li-email" type="email" placeholder="you@email.com" autocomplete="email"/></div>
-    <div class="field"><label>Password</label><input id="li-pass" type="password" placeholder="••••••••" autocomplete="${isLogin?'current-password':'new-password'}"/></div>`;
-  el('login-toggle-text').innerHTML=isLogin?`Don't have an account? <button id="li-toggle">Register free</button>`:`Already have an account? <button id="li-toggle">Sign in</button>`;
-  el('login-submit').onclick=handleLoginSubmit;
-  el('li-pass').onkeydown=e=>{if(e.key==='Enter')handleLoginSubmit();};
-  el('li-toggle').onclick=()=>{state.loginMode=isLogin?'register':'login';state.loginError='';renderLogin();};
+    <div class="field"><label>Password</label><input id="li-pass" type="password" placeholder="••••••••"/></div>`;
+  $id('login-toggle-text').innerHTML=isLogin
+    ?`No account? <button id="li-toggle">Register free</button>`
+    :`Have an account? <button id="li-toggle">Sign in</button>`;
+  $id('login-submit').onclick=doLogin;
+  $id('li-pass').onkeydown=e=>{ if(e.key==='Enter') doLogin(); };
+  $id('li-toggle').onclick=()=>{ S.loginMode=isLogin?'register':'login'; S.loginError=''; renderLogin(); };
 }
-function handleLoginSubmit(){
-  const email=el('li-email').value.trim().toLowerCase(),pass=el('li-pass').value;
-  if(state.loginMode==='register'){
-    const name=el('li-name').value.trim();
-    if(!name||!email||!pass){state.loginError='All fields are required.';renderLogin();return;}
-    if(state.users[email]){state.loginError='Email already registered.';renderLogin();return;}
-    state.users[email]={name,passHash:hashPass(pass),entries:[]};saveDB();
-    state.user=email;state.loginError='';launchApp();
-  }else{
-    if(!email||!pass){state.loginError='Please enter email and password.';renderLogin();return;}
-    const u=state.users[email];
-    if(!u||u.passHash!==hashPass(pass)){state.loginError='Invalid email or password.';renderLogin();return;}
-    state.user=email;state.loginError='';launchApp();
+function doLogin(){
+  const email=$id('li-email').value.trim().toLowerCase(), pass=$id('li-pass').value;
+  if(S.loginMode==='register'){
+    const name=$id('li-name').value.trim();
+    if(!name||!email||!pass){ S.loginError='All fields required.'; renderLogin(); return; }
+    if(S.users[email]){ S.loginError='Email already registered.'; renderLogin(); return; }
+    S.users[email]={name,passHash:hashPass(pass),entries:[]}; saveDB();
+    S.user=email; S.loginError=''; launchApp();
+  } else {
+    if(!email||!pass){ S.loginError='Enter email and password.'; renderLogin(); return; }
+    const u=S.users[email];
+    if(!u||u.passHash!==hashPass(pass)){ S.loginError='Invalid email or password.'; renderLogin(); return; }
+    S.user=email; S.loginError=''; launchApp();
   }
 }
 function launchApp(){
-  el('login-screen').classList.add('hidden');el('app').classList.remove('hidden');
-  const u=state.users[state.user];
-  el('sidebar-name').textContent=u?.name||state.user;
-  el('sidebar-email').textContent=state.user;
-  el('sidebar-avatar').textContent=initials(u?.name||state.user);
-  const sets=getUserSettings();state.calcSettings={...state.calcSettings,...sets};
-  startLiveClock();if(state.clockInTime)startClockTimer();renderTab();
+  $id('login-screen').classList.add('hidden');
+  $id('app').classList.remove('hidden');
+  const u=S.users[S.user];
+  $id('sidebar-name').textContent=u?.name||S.user;
+  $id('sidebar-email').textContent=S.user;
+  $id('sidebar-avatar').textContent=initials(u?.name||S.user);
+  const sets=getSettings(); S.settings={...sets};
+  startClock(); if(S.clockIn) startTimer(); renderTab();
 }
 
-// ── Nav ────────────────────────────────────────────────────────
+// ── Nav ───────────────────────────────────────────────────────
 function setTab(tab){
-  state.tab=tab;
-  qsa('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  el('topbar-title').textContent=TAB_TITLES[tab]||tab;
+  S.tab=tab;
+  $$('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  $id('topbar-title').textContent=TAB_TITLES[tab]||tab;
   renderTab();
-  el('sidebar').classList.remove('open');el('sidebar-overlay').classList.add('hidden');
+  $id('sidebar').classList.remove('open');
+  $id('sidebar-overlay').classList.add('hidden');
 }
 function renderTab(){
-  const c=el('tab-content');c.innerHTML='';
-  const fns={calculator:renderCalculator,timecard:renderTimeCard,calendar:renderCalendar,history:renderHistory,settings:renderSettings};
-  if(fns[state.tab])c.appendChild(fns[state.tab]());
+  const c=$id('tab-content'); c.innerHTML='';
+  const fns={calculator:renderCalculator, history:renderHistory, calendar:renderCalendar, settings:renderSettings};
+  if(fns[S.tab]) c.appendChild(fns[S.tab]());
 }
 
-// ── Select builder ─────────────────────────────────────────────
-function buildSel(opts,selected,cls,data){
-  const s=document.createElement('select');s.className=cls;
-  if(data)Object.entries(data).forEach(([k,v])=>s.dataset[k]=v);
-  opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;if(String(o)===String(selected))op.selected=true;s.appendChild(op);});
-  return s;
-}
-
-// ════════════════════════════════════════════════════════════════
-//  CALCULATOR TAB — simple, big, mobile-first
-// ════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  CALCULATOR
+// ══════════════════════════════════════════════════════════════
 function renderCalculator(){
-  const wrap = document.createElement('div');
-  wrap.className = 'calc-wrap';
-  const s = state.calcSettings;
-  const rate = parseFloat(s.rate) || 0;
-  const otW  = parseFloat(s.otWeek) || 40;
-  const otD  = parseFloat(s.otDay)  || 8;
+  const wrap=div('calc-wrap');
+  const sets=S.settings;
+  const rate=parseFloat(sets.rate)||0, otW=parseFloat(sets.otWeek)||40;
 
-  // ── Rate strip ──
-  const rateCard = div('card calc-rate-card');
-  rateCard.innerHTML = `
-    <div class="calc-rate-row">
+  // ── Rate bar ──
+  const rateBar=div('card rate-bar');
+  rateBar.innerHTML=`
+    <div class="rate-row">
       <div class="field">
         <label>Hourly Rate ($)</label>
-        <input type="number" id="cs-rate" value="${s.rate||''}" placeholder="0.00" min="0" step="0.01" inputmode="decimal"/>
+        <input type="number" id="cs-rate" value="${sets.rate||''}" placeholder="e.g. 15.00" min="0" step="0.01" inputmode="decimal"/>
       </div>
       <div class="field">
         <label>OT after (hrs/week)</label>
-        <input type="number" id="cs-otweek" value="${s.otWeek||40}" min="1" inputmode="numeric"/>
+        <input type="number" id="cs-ot" value="${sets.otWeek||40}" min="1" inputmode="numeric"/>
       </div>
     </div>`;
-  rateCard.querySelector('#cs-rate').addEventListener('input', e => {
-    state.calcSettings.rate = e.target.value;
-    saveUserSettings(state.calcSettings);
-    refreshCalcResults();
-  });
-  rateCard.querySelector('#cs-otweek').addEventListener('input', e => {
-    state.calcSettings.otWeek = parseFloat(e.target.value) || 40;
-    saveUserSettings(state.calcSettings);
-    refreshCalcResults();
-  });
-  wrap.appendChild(rateCard);
+  rateBar.querySelector('#cs-rate').addEventListener('input',e=>{ S.settings.rate=e.target.value; saveSettings(S.settings); reCalc(); });
+  rateBar.querySelector('#cs-ot').addEventListener('input',e=>{ S.settings.otWeek=parseFloat(e.target.value)||40; saveSettings(S.settings); reCalc(); });
+  wrap.appendChild(rateBar);
 
-  // ── Day entries ──
-  const entriesCard = div('card calc-entries-card');
-  entriesCard.innerHTML = `<div class="calc-entries-title">Enter your shifts</div>`;
+  // ── Shift rows ──
+  const shiftCard=div('card shift-card');
+  shiftCard.innerHTML=`<div class="shift-card-title">Your Shifts — tap any date or time to edit</div>`;
 
-  // Each entry is: date + IN time + OUT time + computed total
-  if (!state.calcEntries || state.calcEntries.length === 0) {
-    state.calcEntries = [makeCalcEntry()];
-  }
+  S.rows.forEach((row,idx)=>{
+    const mins=rowMins(row);
+    const rowDiv=div('shift-row'+(mins>0?' shift-has-total':''));
 
-  state.calcEntries.forEach((entry, idx) => {
-    const mins = computeEntryMins(entry);
-    const entryDiv = div('calc-entry-card' + (mins > 0 ? ' has-hours' : ''));
-    entryDiv.dataset.idx = idx;
+    // Date + day name
+    const d=row.date?new Date(row.date+'T12:00:00'):null;
+    const dayName=d?DAYS_LONG[d.getDay()]:'';
 
-    const d = entry.date ? new Date(entry.date + 'T12:00:00') : null;
-    const dayName = d ? d.toLocaleDateString([], {weekday:'long'}) : '';
-
-    entryDiv.innerHTML = `
-      <div class="ce-top-row">
-        <div class="ce-date-wrap">
-          <label class="ce-label">Date</label>
-          <input type="date" class="ce-date big-input" value="${entry.date||''}" data-idx="${idx}"/>
-          ${dayName ? `<div class="ce-dayname">${dayName}</div>` : ''}
+    rowDiv.innerHTML=`
+      <div class="sr-top">
+        <div class="sr-date-col">
+          <label class="sr-lbl">Date</label>
+          <input type="date" class="sr-date big-date" value="${row.date||''}" data-id="${row.id}"/>
+          ${dayName?`<div class="sr-dayname">${dayName}</div>`:''}
         </div>
-        <button class="ce-remove-btn" data-idx="${idx}" title="Remove">×</button>
+        <button class="sr-del" data-id="${row.id}" title="Remove">×</button>
       </div>
-      <div class="ce-times-row">
-        <div class="ce-time-group">
-          <label class="ce-label">Clock In</label>
-          <div class="ce-time-picker">
-            ${buildTimePickerHTML('in', idx, entry.inH, entry.inM, entry.inP)}
-          </div>
+      <div class="sr-times">
+        <div class="sr-time-col">
+          <label class="sr-lbl">Clock In</label>
+          <div class="sr-picker" id="in-${row.id}"></div>
         </div>
-        <div class="ce-arrow">→</div>
-        <div class="ce-time-group">
-          <label class="ce-label">Clock Out</label>
-          <div class="ce-time-picker">
-            ${buildTimePickerHTML('out', idx, entry.outH, entry.outM, entry.outP)}
-          </div>
+        <div class="sr-sep-arrow">→</div>
+        <div class="sr-time-col">
+          <label class="sr-lbl">Clock Out</label>
+          <div class="sr-picker" id="out-${row.id}"></div>
         </div>
       </div>
-      <div class="ce-result">
-        ${mins > 0
-          ? `<span class="ce-result-num${mins/60 > otD ? ' ce-ot' : ''}">${fmtDur(mins)}</span>
-             <span class="ce-result-plain">${plainDur(mins)}</span>
-             ${rate > 0 ? `<span class="ce-result-pay">${fmtMoney(mins/60*rate)}</span>` : ''}`
-          : `<span class="ce-result-empty">Fill in times above</span>`}
+      <div class="sr-total-row">
+        ${mins>0
+          ? `<span class="sr-total-big">${fmtDur(mins)}</span>
+             <span class="sr-total-plain">${plainDur(mins)}</span>
+             ${rate>0?`<span class="sr-total-pay">${fmtMoney(mins/60*rate)}</span>`:''}`
+          : `<span class="sr-total-empty">— set times above —</span>`}
       </div>`;
-    entriesCard.appendChild(entryDiv);
+
+    // Inject time pickers after innerHTML
+    const inDiv=rowDiv.querySelector('#in-'+row.id);
+    const outDiv=rowDiv.querySelector('#out-'+row.id);
+
+    const ih=timeSel(HOURS12,row.inH,'ts-h',{id:row.id,f:'inH'});
+    const im=timeSel(MINS,row.inM,'ts-m',{id:row.id,f:'inM'});
+    const ip=timeSel(['AM','PM'],row.inP,'ts-ap',{id:row.id,f:'inP'});
+    const colon1=document.createElement('span'); colon1.className='ts-colon'; colon1.textContent=':';
+    inDiv.append(ih,colon1,im,ip);
+
+    const oh=timeSel(HOURS12,row.outH,'ts-h',{id:row.id,f:'outH'});
+    const om=timeSel(MINS,row.outM,'ts-m',{id:row.id,f:'outM'});
+    const op=timeSel(['AM','PM'],row.outP,'ts-ap',{id:row.id,f:'outP'});
+    const colon2=document.createElement('span'); colon2.className='ts-colon'; colon2.textContent=':';
+    outDiv.append(oh,colon2,om,op);
+
+    shiftCard.appendChild(rowDiv);
   });
 
-  // Add entry button
-  const addBtn = document.createElement('button');
-  addBtn.className = 'btn calc-add-btn';
-  addBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Add another day`;
-  addBtn.addEventListener('click', () => {
-    state.calcEntries.push(makeCalcEntry());
-    refreshCalcView();
-  });
-  entriesCard.appendChild(addBtn);
-  wrap.appendChild(entriesCard);
+  // Add row button
+  const addBtn=document.createElement('button');
+  addBtn.className='btn add-shift-btn';
+  addBtn.innerHTML=`<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Add another shift`;
+  addBtn.addEventListener('click',()=>{ S.rows.push(mkRow()); reCalc(); });
+  shiftCard.appendChild(addBtn);
+  wrap.appendChild(shiftCard);
 
-  // ── Summary ──
-  const allMins = (state.calcEntries || []).reduce((s, e) => s + computeEntryMins(e), 0);
-  if (allMins > 0) {
-    const totalH = allMins / 60;
-    const regH   = Math.min(totalH, otW);
-    const otH    = Math.max(0, totalH - otW);
-    const totalPay = regH * rate + otH * rate * 1.5;
+  // ── Total summary ──
+  const totalMins=S.rows.reduce((s,r)=>s+rowMins(r),0);
+  if(totalMins>0){
+    const totalH=totalMins/60;
+    const regH=Math.min(totalH,otW), otH=Math.max(0,totalH-otW);
+    const totalPay=regH*rate+otH*rate*1.5;
 
-    const sumCard = div('card calc-summary-card');
-    sumCard.innerHTML = `
-      <div class="calc-sum-big">
-        <div class="calc-sum-hours">${fmtDur(allMins)}</div>
-        <div class="calc-sum-plain">${plainDur(allMins)}</div>
-      </div>
-      <div class="calc-sum-grid">
-        <div class="calc-sum-item">
-          <span class="csi-label">Regular</span>
-          <span class="csi-val">${fmtDur(regH * 60)}</span>
-          ${rate > 0 ? `<span class="csi-pay">${fmtMoney(regH * rate)}</span>` : ''}
+    const sumCard=div('card sum-card');
+    sumCard.innerHTML=`
+      <div class="sum-big-num">${fmtDur(totalMins)}</div>
+      <div class="sum-big-plain">${plainDur(totalMins)}</div>
+      <div class="sum-grid">
+        <div class="sum-item">
+          <div class="sum-item-label">Regular</div>
+          <div class="sum-item-val">${fmtDur(regH*60)}</div>
+          ${rate>0?`<div class="sum-item-sub">${fmtMoney(regH*rate)}</div>`:''}
         </div>
-        <div class="calc-sum-item ${otH > 0 ? 'is-ot' : ''}">
-          <span class="csi-label">Overtime</span>
-          <span class="csi-val">${otH > 0 ? fmtDur(otH * 60) : 'None'}</span>
-          ${rate > 0 && otH > 0 ? `<span class="csi-pay">${fmtMoney(otH * rate * 1.5)} (1.5×)</span>` : ''}
+        <div class="sum-item${otH>0?' sum-ot':''}">
+          <div class="sum-item-label">Overtime</div>
+          <div class="sum-item-val">${otH>0?fmtDur(otH*60):'None'}</div>
+          ${rate>0&&otH>0?`<div class="sum-item-sub">${fmtMoney(otH*rate*1.5)} (1.5×)</div>`:''}
         </div>
-        ${rate > 0 ? `
-        <div class="calc-sum-item is-pay">
-          <span class="csi-label">Total pay</span>
-          <span class="csi-val">${fmtMoney(totalPay)}</span>
-          <span class="csi-pay">@ ${fmtMoney(rate)}/hr</span>
-        </div>` : ''}
+        ${rate>0?`
+        <div class="sum-item sum-pay">
+          <div class="sum-item-label">Est. Pay</div>
+          <div class="sum-item-val">${fmtMoney(totalPay)}</div>
+          <div class="sum-item-sub">@ ${fmtMoney(rate)}/hr</div>
+        </div>`:''}
       </div>
-      <div class="summary-callout" style="margin-top:1rem">
-        ${buildCalcSummaryText(allMins, otH, rate, totalPay, otW)}
+      <div class="sum-plain-text">
+        You worked <strong>${plainDur(totalMins)}</strong>${otH>0?`, including <strong>${plainDur(otH*60)} overtime</strong>`:''}${rate>0?`. Est. pay: <strong>${fmtMoney(totalPay)}</strong>`:''}.
       </div>
-      <div class="calc-save-row">
-        <button class="btn btn-primary calc-save-btn" id="calc-save-btn">
-          <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 4h9l3 3v9H4V4z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v4h6V4M7 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Save to history
-        </button>
-        <button class="btn btn-calc-action" id="calc-clear-btn">
-          <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Clear all
-        </button>
+      <div class="sum-actions">
+        <button class="btn btn-primary sum-save-btn" id="calc-save">Save to history</button>
+        <button class="btn sum-clear-btn" id="calc-clear">Clear all</button>
       </div>`;
-    wrap.appendChild(sumCard);
 
-    sumCard.querySelector('#calc-save-btn').addEventListener('click', () => {
-      let saved = 0;
-      (state.calcEntries || []).forEach(entry => {
-        const mins = computeEntryMins(entry);
-        if (!mins || !entry.date) return;
-        const sm = to24Mins(entry.inH, entry.inM, entry.inP);
-        const em = to24Mins(entry.outH, entry.outM, entry.outP);
-        const sh = String(Math.floor(sm/60)).padStart(2,'0') + ':' + String(sm%60).padStart(2,'0');
-        const eh = String(Math.floor(em/60)).padStart(2,'0') + ':' + String(em%60).padStart(2,'0');
-        saveEntry({id:genId(), clockIn:new Date(entry.date+'T'+sh).toISOString(), clockOut:new Date(entry.date+'T'+eh).toISOString(), durationMins:mins, note:'', source:'manual'});
+    sumCard.querySelector('#calc-save').addEventListener('click',()=>{
+      let saved=0;
+      S.rows.forEach(row=>{
+        const mins=rowMins(row); if(!mins||!row.date) return;
+        const sm=to24(row.inH,row.inM,row.inP), em=to24(row.outH,row.outM,row.outP);
+        const sh=String(Math.floor(sm/60)).padStart(2,'0')+':'+String(sm%60).padStart(2,'0');
+        const eh=String(Math.floor(em/60)).padStart(2,'0')+':'+String(em%60).padStart(2,'0');
+        upsertEntry({id:genId(),clockIn:new Date(row.date+'T'+sh).toISOString(),clockOut:new Date(row.date+'T'+eh).toISOString(),durationMins:mins,note:'',source:'manual'});
         saved++;
       });
-      showToast(saved ? saved + ' shift' + (saved !== 1 ? 's' : '') + ' saved!' : 'Nothing to save');
+      toast(saved?saved+' shift'+(saved!==1?'s':'')+' saved!':'Nothing to save');
     });
-
-    sumCard.querySelector('#calc-clear-btn').addEventListener('click', () => {
-      state.calcEntries = [makeCalcEntry()];
-      refreshCalcView();
-    });
-  } else {
-    // Clear button even when no results
-    const clearWrap = div('calc-clear-wrap');
-    const clearBtn = document.createElement('button');
-    clearBtn.className = 'btn btn-calc-action';
-    clearBtn.innerHTML = 'Clear all';
-    clearBtn.addEventListener('click', () => { state.calcEntries = [makeCalcEntry()]; refreshCalcView(); });
-    clearWrap.appendChild(clearBtn);
-    wrap.appendChild(clearWrap);
+    sumCard.querySelector('#calc-clear').addEventListener('click',()=>{ S.rows=[mkRow()]; reCalc(); });
+    wrap.appendChild(sumCard);
   }
 
-  // ── Bind all events ──
-  // Date inputs
-  qsa('.ce-date', wrap).forEach(inp => {
-    inp.addEventListener('change', e => {
-      const idx = parseInt(e.target.dataset.idx);
-      state.calcEntries[idx].date = e.target.value;
-      refreshCalcView();
-    });
+  // ── Bind events ──
+  $$('.sr-date',wrap).forEach(inp=>{
+    inp.addEventListener('change',e=>{ const r=S.rows.find(x=>x.id===e.target.dataset.id); if(r){ r.date=e.target.value; reCalc(); } });
   });
-
-  // Time selects
-  qsa('.ce-sel', wrap).forEach(sel => {
-    sel.addEventListener('change', e => {
-      const {idx, field} = e.target.dataset;
-      state.calcEntries[parseInt(idx)][field] = e.target.value;
-      refreshCalcResults();
-    });
+  $$('.ts',wrap).forEach(sel=>{
+    sel.addEventListener('change',e=>{ const r=S.rows.find(x=>x.id===e.target.dataset.id); if(r){ r[e.target.dataset.f]=e.target.value; reCalc(); } });
   });
-
-  // Remove buttons
-  qsa('.ce-remove-btn', wrap).forEach(btn => {
-    btn.addEventListener('click', e => {
-      const idx = parseInt(e.target.dataset.idx);
-      if (state.calcEntries.length === 1) {
-        state.calcEntries = [makeCalcEntry()];
-      } else {
-        state.calcEntries.splice(idx, 1);
-      }
-      refreshCalcView();
+  $$('.sr-del',wrap).forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      const id=e.currentTarget.dataset.id;
+      S.rows=S.rows.length===1?[mkRow()]:S.rows.filter(r=>r.id!==id);
+      reCalc();
     });
   });
 
   return wrap;
 }
 
-function buildTimePickerHTML(type, idx, h, m, p) {
-  const prefix = type === 'in' ? 'in' : 'out';
-  const hField = prefix + 'H';
-  const mField = prefix + 'M';
-  const pField = prefix + 'P';
-  const hOpts  = HOURS12.map(o => `<option value="${o}"${String(o)===String(h)?'selected':''}>${o}</option>`).join('');
-  const mOpts  = MINS_LIST.map(o => `<option value="${o}"${String(o)===String(m)?'selected':''}>${o}</option>`).join('');
-  const pOpts  = ['AM','PM'].map(o => `<option value="${o}"${o===p?'selected':''}>${o}</option>`).join('');
-  return `
-    <select class="ce-sel ce-h" data-idx="${idx}" data-field="${hField}">${hOpts}</select>
-    <span class="ce-colon">:</span>
-    <select class="ce-sel ce-m" data-idx="${idx}" data-field="${mField}">${mOpts}</select>
-    <select class="ce-sel ce-ap" data-idx="${idx}" data-field="${pField}">${pOpts}</select>`;
+function reCalc(){
+  const c=$id('tab-content'); const y=c.scrollTop;
+  c.innerHTML=''; c.appendChild(renderCalculator()); c.scrollTop=y;
 }
 
-function makeCalcEntry() {
-  return { date: todayStr(), inH:'9', inM:'00', inP:'AM', outH:'5', outM:'00', outP:'PM' };
+// ══════════════════════════════════════════════════════════════
+//  HISTORY — with inline edit
+// ══════════════════════════════════════════════════════════════
+function renderHistory(){
+  const wrap=document.createElement('div');
+  const now=new Date(), sets=getSettings(), rate=parseFloat(sets.rate)||0, otW=sets.otWeek||40;
+
+  // Pay period calculator
+  const rangeCard=div('card');
+  rangeCard.innerHTML=`
+    <div class="card-header"><span class="card-title">Pay period calculator</span></div>
+    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;line-height:1.6">
+      Pick a date range to see total hours and estimated pay — e.g. your last pay period.
+    </p>
+    <div class="form-row cols-2" style="margin-bottom:1rem">
+      <div class="field"><label>From</label><input type="date" id="rf" value="${S.rangeFrom||''}"/></div>
+      <div class="field"><label>To</label><input type="date" id="rt" value="${S.rangeTo||''}"/></div>
+    </div>`;
+
+  if(S.rangeFrom&&S.rangeTo){
+    const from=new Date(S.rangeFrom+'T00:00:00'), to=new Date(S.rangeTo+'T23:59:59');
+    let rMins=0; const daySet=new Set();
+    getEntries().filter(e=>{const d=new Date(e.clockIn);return d>=from&&d<=to;}).forEach(e=>{rMins+=e.durationMins||0; daySet.add(isoDate(new Date(e.clockIn)));});
+    const rH=rMins/60, rReg=Math.min(rH,otW), rOT=Math.max(0,rH-otW), rPay=rReg*rate+rOT*rate*1.5;
+    if(rMins>0){
+      const rg=div('stat-grid'); rg.style.marginBottom='1rem';
+      rg.innerHTML=`
+        <div class="stat-card accent"><div class="stat-label">Total hours</div><div class="stat-value">${fmtDur(rMins)}</div><div class="stat-sub">${plainDur(rMins)}</div></div>
+        <div class="stat-card"><div class="stat-label">Days worked</div><div class="stat-value">${daySet.size}</div><div class="stat-sub">unique days</div></div>
+        <div class="stat-card ${rOT>0?'amber':''}"><div class="stat-label">Overtime</div><div class="stat-value">${rOT>0?fmtDur(rOT*60):'None'}</div><div class="stat-sub">${rOT>0?'over '+otW+'h threshold':''}</div></div>
+        ${rate>0?`<div class="stat-card green"><div class="stat-label">You are owed</div><div class="stat-value">${fmtMoney(rPay)}</div><div class="stat-sub">${rOT>0?'incl. OT':'@ '+fmtMoney(rate)+'/hr'}</div></div>`:''}`;
+      rangeCard.appendChild(rg);
+      const co=div('summary-callout');
+      co.innerHTML=`From <strong>${new Date(S.rangeFrom+'T12:00:00').toLocaleDateString([],{month:'long',day:'numeric'})}</strong> to <strong>${new Date(S.rangeTo+'T12:00:00').toLocaleDateString([],{month:'long',day:'numeric',year:'numeric'})}</strong> — you worked <strong>${plainDur(rMins)}</strong> over <strong>${daySet.size} days</strong>${rOT>0?`, including <strong>${plainDur(rOT*60)} overtime</strong>`:''}${rate>0?`. Estimated pay: <strong>${fmtMoney(rPay)}</strong>`:''}.`;
+      rangeCard.appendChild(co);
+    } else {
+      const no=div('summary-callout','No hours logged in this range.');
+      no.style.borderLeftColor='var(--amber)'; rangeCard.appendChild(no);
+    }
+  }
+  rangeCard.querySelector('#rf').addEventListener('change',e=>{ S.rangeFrom=e.target.value; renderTab(); });
+  rangeCard.querySelector('#rt').addEventListener('change',e=>{ S.rangeTo=e.target.value; renderTab(); });
+  wrap.appendChild(rangeCard);
+
+  // Entry list
+  const filters=['all','today','week','month'];
+  const raw=getEntries().filter(e=>{
+    const d=new Date(e.clockIn);
+    if(S.histFilter==='today') return d.toDateString()===now.toDateString();
+    if(S.histFilter==='week')  return (now-d)<7*86400000;
+    if(S.histFilter==='month') return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
+    return true;
+  }).sort((a,b)=>new Date(b.clockIn)-new Date(a.clockIn));
+
+  const totalMins=raw.reduce((s,e)=>s+(e.durationMins||0),0);
+  const listCard=div('card');
+  listCard.innerHTML=`
+    <div class="card-header" style="flex-wrap:wrap;gap:10px">
+      <span class="card-title">All entries</span>
+      <div class="period-tabs">${filters.map(f=>`<button class="period-tab${S.histFilter===f?' active':''}" data-hf="${f}">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`).join('')}</div>
+    </div>
+    ${totalMins>0?`<div style="margin-bottom:1rem;font-size:0.82rem;color:var(--text-secondary)">${raw.length} record${raw.length!==1?'s':''} · Total: <strong style="color:var(--accent)">${fmtDur(totalMins)}</strong> — ${plainDur(totalMins)}${rate>0?` · <span style="color:var(--green)">${fmtMoney(totalMins/60*rate)}</span>`:''}</div>`:''}`;
+
+  if(raw.length===0){
+    listCard.innerHTML+=`<div class="empty-state"><p>No records for this period.</p></div>`;
+  } else {
+    raw.forEach(e=>{
+      const ci=new Date(e.clockIn), co=new Date(e.clockOut);
+      const eDiv=div('hist-entry');
+      eDiv.dataset.id=e.id;
+      eDiv.innerHTML=`
+        <div class="he-main">
+          <div class="he-date">${ci.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric',year:'numeric'})}</div>
+          <div class="he-times">${fmt12(ci.getHours()*60+ci.getMinutes())} → ${fmt12(co.getHours()*60+co.getMinutes())}</div>
+          <div class="he-dur"><strong>${fmtDur(e.durationMins)}</strong> <span class="he-plain">${plainDur(e.durationMins)}</span>${rate>0?` <span class="he-pay">${fmtMoney(e.durationMins/60*rate)}</span>`:''}</div>
+          ${e.note?`<div class="he-note">${e.note}</div>`:''}
+        </div>
+        <div class="he-actions">
+          <button class="btn btn-sm btn-outline he-edit-btn" data-id="${e.id}">Edit</button>
+          <button class="btn btn-sm btn-danger he-del-btn" data-id="${e.id}">Delete</button>
+        </div>
+        <div class="he-edit-form hidden" id="ef-${e.id}"></div>`;
+      listCard.appendChild(eDiv);
+    });
+  }
+
+  $$('[data-hf]',listCard).forEach(b=>b.addEventListener('click',()=>{ S.histFilter=b.dataset.hf; renderTab(); }));
+  $$('.he-del-btn',listCard).forEach(b=>b.addEventListener('click',e=>{
+    if(confirm('Delete this entry?')){ removeEntry(e.currentTarget.dataset.id); renderTab(); toast('Deleted'); }
+  }));
+  $$('.he-edit-btn',listCard).forEach(b=>b.addEventListener('click',e=>{
+    const id=e.currentTarget.dataset.id;
+    const formDiv=$id('ef-'+id);
+    if(!formDiv) return;
+    if(!formDiv.classList.contains('hidden')){ formDiv.classList.add('hidden'); formDiv.innerHTML=''; return; }
+    const entry=getEntries().find(x=>x.id===id); if(!entry) return;
+    formDiv.classList.remove('hidden');
+    formDiv.appendChild(buildEditForm(entry, ()=>renderTab()));
+  }));
+
+  wrap.appendChild(listCard);
+  return wrap;
 }
 
-function computeEntryMins(entry) {
-  if (!entry.inH || !entry.outH) return 0;
-  let s = to24Mins(entry.inH, entry.inM, entry.inP);
-  let e = to24Mins(entry.outH, entry.outM, entry.outP);
-  if (e <= s) e += 1440;
-  return Math.max(0, e - s);
+function buildEditForm(entry, onSave){
+  const ci=new Date(entry.clockIn), co=new Date(entry.clockOut);
+  const dateStr=isoDate(ci);
+  let ih=ci.getHours(), im=ci.getMinutes(), ip=ih<12?'AM':'PM';
+  if(ih===0)ih=12; else if(ih>12)ih-=12;
+  let oh=co.getHours(), om=co.getMinutes(), op=oh<12?'AM':'PM';
+  if(oh===0)oh=12; else if(oh>12)oh-=12;
+
+  const form=div('edit-form');
+  form.innerHTML=`
+    <div class="ef-row">
+      <div class="field"><label>Date</label><input type="date" class="ef-date" value="${dateStr}"/></div>
+      <div class="field"><label>Note</label><input type="text" class="ef-note" value="${entry.note||''}" placeholder="Optional note"/></div>
+    </div>
+    <div class="ef-row">
+      <div>
+        <label class="ef-lbl">Clock In</label>
+        <div class="sr-picker" id="ef-in"></div>
+      </div>
+      <div class="sr-sep-arrow" style="padding-top:22px">→</div>
+      <div>
+        <label class="ef-lbl">Clock Out</label>
+        <div class="sr-picker" id="ef-out"></div>
+      </div>
+    </div>
+    <div class="ef-preview" id="ef-prev-${entry.id}"></div>
+    <div class="ef-btns">
+      <button class="btn btn-primary btn-sm ef-save">Update</button>
+      <button class="btn btn-outline btn-sm ef-cancel">Cancel</button>
+    </div>`;
+
+  // Build pickers
+  const inDiv=form.querySelector('#ef-in');
+  const eih=timeSel(HOURS12,String(ih),'ts-h',{}); const eim=timeSel(MINS,String(im).padStart(2,'0'),'ts-m',{}); const eip=timeSel(['AM','PM'],ip,'ts-ap',{});
+  const c1=document.createElement('span'); c1.className='ts-colon'; c1.textContent=':';
+  inDiv.append(eih,c1,eim,eip);
+
+  const outDiv=form.querySelector('#ef-out');
+  const eoh=timeSel(HOURS12,String(oh),'ts-h',{}); const eom=timeSel(MINS,String(om).padStart(2,'0'),'ts-m',{}); const eop=timeSel(['AM','PM'],op,'ts-ap',{});
+  const c2=document.createElement('span'); c2.className='ts-colon'; c2.textContent=':';
+  outDiv.append(eoh,c2,eom,eop);
+
+  function updatePreview(){
+    const sm=to24(eih.value,eim.value,eip.value), em=to24(eoh.value,eom.value,eop.value);
+    let diff=em-sm; if(diff<=0) diff+=1440;
+    const prev=form.querySelector('#ef-prev-'+entry.id);
+    if(prev) prev.innerHTML=diff>0?`<strong style="color:var(--green)">${fmtDur(diff)}</strong> — ${plainDur(diff)}`:`<span style="color:var(--red)">Invalid times</span>`;
+  }
+  [eih,eim,eip,eoh,eom,eop].forEach(s=>s.addEventListener('change',updatePreview));
+  updatePreview();
+
+  form.querySelector('.ef-cancel').addEventListener('click',()=>{ form.closest('.he-edit-form').classList.add('hidden'); form.innerHTML=''; });
+  form.querySelector('.ef-save').addEventListener('click',()=>{
+    const dateVal=form.querySelector('.ef-date').value||dateStr;
+    const sm=to24(eih.value,eim.value,eip.value), em=to24(eoh.value,eom.value,eop.value);
+    let diff=em-sm; if(diff<=0) diff+=1440;
+    if(diff<=0){ toast('End must be after start'); return; }
+    const sh=String(Math.floor(sm/60)).padStart(2,'0')+':'+String(sm%60).padStart(2,'0');
+    const eh=String(Math.floor(em/60)).padStart(2,'0')+':'+String(em%60).padStart(2,'0');
+    upsertEntry({...entry, date:dateVal, clockIn:new Date(dateVal+'T'+sh).toISOString(), clockOut:new Date(dateVal+'T'+eh).toISOString(), durationMins:diff, note:form.querySelector('.ef-note').value.trim()});
+    toast('Entry updated'); onSave();
+  });
+  return form;
 }
 
-function buildCalcSummaryText(totalMins, otH, rate, totalPay, otW) {
-  let t = `You worked <strong>${plainDur(totalMins)}</strong>`;
-  if (otH > 0) t += `, including <strong>${plainDur(otH * 60)} of overtime</strong>`;
-  t += '.';
-  if (rate > 0) t += ` At <strong>${fmtMoney(rate)}/hr</strong>${otH > 0 ? ' with overtime at 1.5×' : ''}, your estimated pay is <strong>${fmtMoney(totalPay)}</strong>.`;
-  return t;
-}
-
-function refreshCalcResults() {
-  // Cheap refresh — only update result rows without full re-render
-  refreshCalcView();
-}
-
-function refreshCalcView() {
-  const c = el('tab-content');
-  const y = c.scrollTop;
-  c.innerHTML = '';
-  c.appendChild(renderCalculator());
-  c.scrollTop = y;
-}
-
-function mkSep()  { const s=document.createElement('span'); s.className='tp-sep'; s.textContent=':'; return s; }
-function mkSpace(){ const s=document.createElement('span'); s.style.cssText='width:4px;display:inline-block;flex-shrink:0'; return s; }
-function mkSep2() { return mkSpace(); }
-
-// ════════════════════════════════════════════════════════════════
-//  CALENDAR TAB — click any day to view/edit hours
-// ════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  CALENDAR
+// ══════════════════════════════════════════════════════════════
 function renderCalendar(){
   const wrap=document.createElement('div');
-  const {calYear:y,calMonth:m,calSelectedDate:sel}=state;
-  const entries=getEntries();
+  const {calY:y,calM:m,calSel:sel}=S;
   const byDay={};
-  entries.forEach(e=>{
+  getEntries().forEach(e=>{
     const d=new Date(e.clockIn);
-    if(d.getFullYear()===y&&d.getMonth()+1===m){const day=d.getDate();byDay[day]=(byDay[day]||0)+(e.durationMins||0);}
+    if(d.getFullYear()===y&&d.getMonth()+1===m){ const day=d.getDate(); byDay[day]=(byDay[day]||0)+(e.durationMins||0); }
   });
   const totalMins=Object.values(byDay).reduce((a,b)=>a+b,0);
-  const firstDay=new Date(y,m-1,1).getDay(),daysIn=new Date(y,m,0).getDate(),today=new Date();
-
+  const firstDay=new Date(y,m-1,1).getDay(), daysIn=new Date(y,m,0).getDate(), today=new Date();
   const calCard=div('card');
   calCard.innerHTML=`
     <div class="cal-nav">
       <button class="btn btn-outline btn-sm" id="cal-prev">‹</button>
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1.05rem;font-weight:500;text-align:center">${MONTHS[m-1]} ${y}</div>
-        ${totalMins>0?`<div style="text-align:center;font-size:0.72rem;color:var(--accent);margin-top:2px">${plainDur(totalMins)} logged this month</div>`:''}
+      <div style="text-align:center">
+        <div style="font-family:var(--font-mono);font-size:1.05rem;font-weight:500">${MONTHS[m-1]} ${y}</div>
+        ${totalMins>0?`<div style="font-size:0.72rem;color:var(--accent);margin-top:2px">${plainDur(totalMins)} logged this month</div>`:''}
       </div>
       <button class="btn btn-outline btn-sm" id="cal-next">›</button>
     </div>
-    <div class="cal-grid" id="cal-grid">
-      ${DAYS.map(d=>`<div class="cal-day-name">${d}</div>`).join('')}
+    <div class="cal-grid">
+      ${DAYS_S.map(d=>`<div class="cal-day-name">${d}</div>`).join('')}
       ${Array(firstDay).fill('<div class="cal-day empty"></div>').join('')}
       ${Array.from({length:daysIn},(_,i)=>{
-        const day=i+1;
-        const isToday=y===today.getFullYear()&&m===today.getMonth()+1&&day===today.getDate();
-        const mins=byDay[day]||0;
-        const dateStr=y+'-'+(String(m).padStart(2,'0'))+'-'+(String(day).padStart(2,'0'));
+        const day=i+1, isToday=y===today.getFullYear()&&m===today.getMonth()+1&&day===today.getDate();
+        const mins=byDay[day]||0, worked=mins>0;
+        const dateStr=y+'-'+String(m).padStart(2,'0')+'-'+String(day).padStart(2,'0');
         const isSel=sel===dateStr;
-        return `<div class="cal-day ${mins>0?'worked':'no-work'}${isToday?' today':''}${isSel?' cal-selected':''}" data-date="${dateStr}">
+        return `<div class="cal-day ${worked?'worked':'no-work'}${isToday?' today':''}${isSel?' cal-selected':''}" data-date="${dateStr}">
           <span class="cal-num">${day}</span>
-          ${mins>0?`<span class="cal-hrs">${fmtDur(mins)}</span>`:''}
+          ${worked?`<span class="cal-hrs">${fmtDur(mins)}</span>`:''}
         </div>`;
       }).join('')}
     </div>
     <div class="cal-legend">
       <span><span class="leg-dot worked-dot"></span>Worked</span>
       <span><span class="leg-dot empty-dot"></span>No record</span>
-      <span style="color:var(--text-muted);font-size:0.72rem">Tap any day to view or edit</span>
-    </div>
-  `;
-
-  calCard.querySelector('#cal-prev').addEventListener('click',()=>{if(state.calMonth===1){state.calMonth=12;state.calYear--;}else state.calMonth--;state.calSelectedDate=null;renderTab();});
-  calCard.querySelector('#cal-next').addEventListener('click',()=>{if(state.calMonth===12){state.calMonth=1;state.calYear++;}else state.calMonth++;state.calSelectedDate=null;renderTab();});
-  qsa('.cal-day[data-date]',calCard).forEach(cell=>{
-    cell.addEventListener('click',()=>{
-      state.calSelectedDate=state.calSelectedDate===cell.dataset.date?null:cell.dataset.date;
-      renderTab();
-    });
-  });
+      <span style="color:var(--text-muted);font-size:0.72rem">Tap a day to view & edit</span>
+    </div>`;
+  calCard.querySelector('#cal-prev').addEventListener('click',()=>{ if(S.calM===1){S.calM=12;S.calY--;}else S.calM--; S.calSel=null; renderTab(); });
+  calCard.querySelector('#cal-next').addEventListener('click',()=>{ if(S.calM===12){S.calM=1;S.calY++;}else S.calM++; S.calSel=null; renderTab(); });
+  $$('.cal-day[data-date]',calCard).forEach(cell=>cell.addEventListener('click',()=>{ S.calSel=S.calSel===cell.dataset.date?null:cell.dataset.date; renderTab(); }));
   wrap.appendChild(calCard);
-
-  // ── Day detail panel ──
-  if(sel){
-    wrap.appendChild(renderDayPanel(sel));
-  }
-
+  if(sel){ wrap.appendChild(renderDayPanel(sel)); }
   return wrap;
 }
 
 function renderDayPanel(dateStr){
   const panel=div('card day-panel');
-  const dayEntries=entriesForDate(dateStr);
+  const dayEntries=getEntries().filter(e=>isoDate(new Date(e.clockIn))===dateStr);
   const totalMins=dayEntries.reduce((s,e)=>s+(e.durationMins||0),0);
-  const rate=parseFloat(getUserSettings().rate)||0;
-
+  const rate=parseFloat(getSettings().rate)||0;
   panel.innerHTML=`
     <div class="card-header">
-      <span class="card-title">${dateLabel(dateStr)}</span>
-      <button class="btn btn-primary btn-sm" id="dp-add-entry">+ Add entry</button>
+      <span class="card-title">${new Date(dateStr+'T12:00:00').toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</span>
+      <button class="btn btn-primary btn-sm" id="dp-add">+ Add entry</button>
     </div>
     <div class="day-summary-bar">
-      <div class="day-sum-big">${totalMins>0?fmtDur(totalMins):'No hours logged'}</div>
+      <div class="day-sum-big">${totalMins>0?fmtDur(totalMins):'No hours'}</div>
       <div class="day-sum-plain">${plainDur(totalMins)}</div>
-      ${rate>0&&totalMins>0?`<div class="day-sum-pay">${fmtMoney(totalMins/60*rate)} earned</div>`:''}
+      ${rate>0&&totalMins>0?`<div class="day-sum-pay">${fmtMoney(totalMins/60*rate)}</div>`:''}
     </div>
-    <div id="dp-entries">
-      ${dayEntries.length===0?'<div class="empty-state" style="padding:1.5rem"><p>No entries for this day.<br/>Click "+ Add entry" to log hours manually.</p></div>':''}
-      ${dayEntries.map(e=>renderDayEntry(e)).join('')}
+    <div id="dp-list">
+      ${dayEntries.length===0?'<div class="empty-state" style="padding:1rem"><p>No entries. Click "+ Add entry" to log hours.</p></div>':''}
+      ${dayEntries.map(e=>{
+        const ci=new Date(e.clockIn),co=new Date(e.clockOut);
+        return `<div class="dp-entry" data-id="${e.id}">
+          <div class="dp-times">${fmt12(ci.getHours()*60+ci.getMinutes())} → ${fmt12(co.getHours()*60+co.getMinutes())}</div>
+          <div class="dp-dur">${fmtDur(e.durationMins)} <span style="color:var(--text-muted);font-size:0.72rem">${plainDur(e.durationMins)}</span></div>
+          ${e.note?`<div class="dp-note">${e.note}</div>`:''}
+          <div class="dp-btns">
+            <button class="btn btn-sm btn-outline dp-edit" data-id="${e.id}">Edit</button>
+            <button class="btn btn-sm btn-danger dp-del" data-id="${e.id}">Delete</button>
+          </div>
+          <div class="dp-ef hidden" id="dpef-${e.id}"></div>
+        </div>`;
+      }).join('')}
     </div>
-    <div id="dp-form-wrap"></div>
-  `;
-
-  panel.querySelector('#dp-add-entry').addEventListener('click',()=>{
-    const fw=panel.querySelector('#dp-form-wrap');
-    if(fw.innerHTML){fw.innerHTML='';return;}
-    fw.appendChild(buildEntryForm(null,dateStr,panel));
+    <div id="dp-add-form"></div>`;
+  panel.querySelector('#dp-add').addEventListener('click',()=>{
+    const f=$id('dp-add-form'); if(f.innerHTML){ f.innerHTML=''; return; }
+    f.appendChild(buildAddForm(dateStr,()=>renderTab()));
   });
-
-  qsa('.dp-edit-btn',panel).forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const id=btn.dataset.id;
-      const entry=getEntries().find(e=>e.id===id);
-      if(!entry)return;
-      const fw=panel.querySelector('#dp-form-wrap');
-      fw.appendChild(buildEntryForm(entry,dateStr,panel));
-      btn.closest('.dp-entry').style.opacity='0.4';
-    });
-  });
-  qsa('.dp-del-btn',panel).forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      if(confirm('Delete this entry?')){deleteEntry(btn.dataset.id);renderTab();showToast('Entry deleted');}
-    });
-  });
-
+  $$('.dp-del',panel).forEach(b=>b.addEventListener('click',e=>{ if(confirm('Delete?')){ removeEntry(e.currentTarget.dataset.id); renderTab(); toast('Deleted'); } }));
+  $$('.dp-edit',panel).forEach(b=>b.addEventListener('click',e=>{
+    const id=e.currentTarget.dataset.id, ef=$id('dpef-'+id);
+    if(!ef) return;
+    if(!ef.classList.contains('hidden')){ ef.classList.add('hidden'); ef.innerHTML=''; return; }
+    const entry=getEntries().find(x=>x.id===id); if(!entry) return;
+    ef.classList.remove('hidden');
+    ef.appendChild(buildEditForm(entry,()=>renderTab()));
+  }));
   return panel;
 }
 
-function renderDayEntry(e){
-  const ci=new Date(e.clockIn),co=new Date(e.clockOut);
-  const inStr=fmt12(ci.getHours()*60+ci.getMinutes());
-  const outStr=fmt12(co.getHours()*60+co.getMinutes());
-  return `<div class="dp-entry" data-id="${e.id}">
-    <div class="dp-entry-times"><span class="dp-in">${inStr}</span><span class="dp-arrow">→</span><span class="dp-out">${outStr}</span></div>
-    <div class="dp-entry-dur">${fmtDur(e.durationMins)} <span style="color:var(--text-muted);font-size:0.72rem">· ${plainDur(e.durationMins)}</span></div>
-    ${e.note?`<div class="dp-entry-note">${e.note}</div>`:''}
-    <div class="dp-entry-actions">
-      <button class="btn btn-outline btn-sm dp-edit-btn" data-id="${e.id}">Edit</button>
-      <button class="btn btn-danger btn-sm dp-del-btn" data-id="${e.id}">Delete</button>
-    </div>
-  </div>`;
-}
-
-function buildEntryForm(entry,dateStr,panel){
-  // Parse existing entry or defaults
-  let defInH='9',defInM='00',defInP='AM',defOutH='5',defOutM='00',defOutP='PM',defNote='';
-  if(entry){
-    const ci=new Date(entry.clockIn),co=new Date(entry.clockOut);
-    const ciMins=ci.getHours()*60+ci.getMinutes();
-    const coMins=co.getHours()*60+co.getMinutes();
-    let ih=ci.getHours(),im=ci.getMinutes(),ip=ih<12?'AM':'PM';
-    if(ih===0)ih=12;else if(ih>12)ih-=12;
-    defInH=String(ih);defInM=String(im).padStart(2,'0');defInP=ip;
-    let oh=co.getHours(),om=co.getMinutes(),op=oh<12?'AM':'PM';
-    if(oh===0)oh=12;else if(oh>12)oh-=12;
-    defOutH=String(oh);defOutM=String(om).padStart(2,'0');defOutP=op;
-    defNote=entry.note||'';
-  }
-
-  const form=div('entry-form');
-  form.innerHTML=`
-    <div class="entry-form-title">${entry?'Edit entry':'Add new entry'} for ${dateLabel(dateStr)}</div>
-    <div class="entry-form-row">
-      <div class="entry-form-col">
-        <label class="entry-label">Start time</label>
-        <div class="time-picker" id="ef-start"></div>
-      </div>
-      <div class="entry-form-col">
-        <label class="entry-label">End time</label>
-        <div class="time-picker" id="ef-end"></div>
-      </div>
-      <div class="entry-form-col" style="flex:2">
-        <label class="entry-label">Note (optional)</label>
-        <input type="text" id="ef-note" class="ef-note-input" placeholder="e.g. Opening shift" value="${defNote}"/>
-      </div>
-    </div>
-    <div class="entry-form-preview" id="ef-preview"></div>
-    <div class="entry-form-actions">
-      <button class="btn btn-primary btn-sm" id="ef-save">${entry?'Update':'Add entry'}</button>
-      <button class="btn btn-outline btn-sm" id="ef-cancel">Cancel</button>
-    </div>
-  `;
-
-  // Inject time pickers
-  const startDiv=form.querySelector('#ef-start');
-  const sh=buildSel(HOURS12,defInH,'tp-sel tp-h',{});
-  const sm=buildSel(MINS_LIST,defInM,'tp-sel tp-m',{});
-  const sp=buildSel(['AM','PM'],defInP,'tp-sel tp-ap',{});
-  startDiv.append(sh,mkSep(),sm,mkSep2(),sp);
-
-  const endDiv=form.querySelector('#ef-end');
-  const eh=buildSel(HOURS12,defOutH,'tp-sel tp-h',{});
-  const em=buildSel(MINS_LIST,defOutM,'tp-sel tp-m',{});
-  const ep=buildSel(['AM','PM'],defOutP,'tp-sel tp-ap',{});
-  endDiv.append(eh,mkSep(),em,mkSep2(),ep);
-
-  function updatePreview(){
-    const sv=to24Mins(sh.value,sm.value,sp.value);
-    const ev=to24Mins(eh.value,em.value,ep.value);
-    let diff=ev-sv;if(diff<=0)diff+=1440;
-    const prev=form.querySelector('#ef-preview');
-    prev.innerHTML=diff>0?`<span class="ef-prev-num">${fmtDur(diff)}</span> <span class="ef-prev-plain">— ${plainDur(diff)}</span>`:'<span style="color:var(--red)">End time must be after start time</span>';
-  }
-  [sh,sm,sp,eh,em,ep].forEach(s=>s.addEventListener('change',updatePreview));
-  updatePreview();
-
-  form.querySelector('#ef-cancel').addEventListener('click',()=>{form.remove();qsa('.dp-entry',panel).forEach(e=>e.style.opacity='1');});
-
-  form.querySelector('#ef-save').addEventListener('click',()=>{
-    const sv=to24Mins(sh.value,sm.value,sp.value);
-    const ev=to24Mins(eh.value,em.value,ep.value);
-    let diff=ev-sv;if(diff<=0)diff+=1440;
-    if(diff<=0){showToast('End time must be after start time');return;}
-    const shStr=String(Math.floor(sv/60)).padStart(2,'0')+':'+String(sv%60).padStart(2,'0');
-    const ehStr=String(Math.floor(ev/60)).padStart(2,'0')+':'+String(ev%60).padStart(2,'0');
-    const note=form.querySelector('#ef-note').value.trim();
-    const entryToSave={
-      id:entry?entry.id:genId(),
-      clockIn:new Date(dateStr+'T'+shStr).toISOString(),
-      clockOut:new Date(dateStr+'T'+ehStr).toISOString(),
-      durationMins:diff,note,source:'manual'
-    };
-    saveEntry(entryToSave);
-    showToast(entry?'Entry updated':'Entry added');
-    renderTab();
+function buildAddForm(dateStr, onSave){
+  const tmpEntry={id:'_new',clockIn:new Date(dateStr+'T09:00').toISOString(),clockOut:new Date(dateStr+'T17:00').toISOString(),durationMins:480,note:''};
+  const form=buildEditForm(tmpEntry, ()=>{});
+  // Override save to create new
+  const saveBtn=form.querySelector('.ef-save');
+  saveBtn.textContent='Add entry';
+  const newHandler=()=>{
+    const dateVal=form.querySelector('.ef-date').value||dateStr;
+    const inDiv=form.querySelector('#ef-in'), outDiv=form.querySelector('#ef-out');
+    const [eih,eim,eip]=[...$$(`.ts-h`,inDiv),...$$(`.ts-m`,inDiv),...$$(`.ts-ap`,inDiv)];
+    // just re-use buildEditForm's save logic by triggering it
+    saveBtn.dispatchEvent(new Event('_nosave'));
+  };
+  // Simpler: just replace save handler
+  saveBtn.replaceWith(saveBtn.cloneNode(true));
+  form.querySelector('.ef-save').addEventListener('click',()=>{
+    const dateVal=form.querySelector('.ef-date').value||dateStr;
+    const [eih]=$$('.ts-h',form), [eim]=$$('.ts-m',form), [eip]=$$('.ts-ap',form);
+    const allH=$$('.ts-h',form), allM=$$('.ts-m',form), allAP=$$('.ts-ap',form);
+    const sm=to24(allH[0].value,allM[0].value,allAP[0].value);
+    const em=to24(allH[1].value,allM[1].value,allAP[1].value);
+    let diff=em-sm; if(diff<=0) diff+=1440;
+    if(diff<=0){ toast('End must be after start'); return; }
+    const sh=String(Math.floor(sm/60)).padStart(2,'0')+':'+String(sm%60).padStart(2,'0');
+    const eh=String(Math.floor(em/60)).padStart(2,'0')+':'+String(em%60).padStart(2,'0');
+    upsertEntry({id:genId(),clockIn:new Date(dateVal+'T'+sh).toISOString(),clockOut:new Date(dateVal+'T'+eh).toISOString(),durationMins:diff,note:form.querySelector('.ef-note').value.trim(),source:'manual'});
+    toast('Entry added'); onSave();
   });
-
   return form;
 }
 
-// ════════════════════════════════════════════════════════════════
-//  HISTORY TAB — with pay period range calculator
-// ════════════════════════════════════════════════════════════════
-function renderHistory(){
-  const wrap=document.createElement('div');
-  const now=new Date();
-
-  // ── Pay period range calculator ──
-  const rangeCard=div('card');
-  const {rangeFrom:rf,rangeTo:rt}=state;
-  // Compute range totals
-  let rangeMins=0,rangeDays=0;
-  const sets=getUserSettings();const rate=parseFloat(sets.rate)||0;
-  const otW=sets.otWeek||40;
-  if(rf&&rt){
-    const from=new Date(rf+'T00:00:00'),to=new Date(rt+'T23:59:59');
-    getEntries().forEach(e=>{const d=new Date(e.clockIn);if(d>=from&&d<=to){rangeMins+=e.durationMins||0;}});
-    // count unique days
-    const daySet=new Set();
-    getEntries().filter(e=>{const d=new Date(e.clockIn);return d>=from&&d<=to;}).forEach(e=>daySet.add(isoDate(new Date(e.clockIn))));
-    rangeDays=daySet.size;
-  }
-  const rangeH=rangeMins/60;
-  const rangeReg=Math.min(rangeH,otW),rangeOT=Math.max(0,rangeH-otW);
-  const rangePay=rangeReg*rate+rangeOT*rate*1.5;
-
-  rangeCard.innerHTML=`
-    <div class="card-header"><span class="card-title">Pay period calculator</span></div>
-    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;line-height:1.6">
-      Select a date range — like your last pay period — to see exactly how many hours you worked and how much you're owed.
-    </p>
-    <div class="form-row cols-2" style="margin-bottom:1rem">
-      <div class="field"><label>From date</label><input type="date" id="range-from" value="${rf||''}"/></div>
-      <div class="field"><label>To date</label><input type="date" id="range-to" value="${rt||''}"/></div>
-    </div>
-    ${rf&&rt&&rangeMins>0?`
-      <div class="range-result">
-        <div class="stat-grid" style="margin-bottom:1rem">
-          <div class="stat-card accent"><div class="stat-label">Total hours</div><div class="stat-value">${fmtDur(rangeMins)}</div><div class="stat-sub">${plainDur(rangeMins)}</div></div>
-          <div class="stat-card"><div class="stat-label">Days worked</div><div class="stat-value">${rangeDays}</div><div class="stat-sub">${rangeDays} day${rangeDays!==1?'s':''}</div></div>
-          <div class="stat-card ${rangeOT>0?'amber':''}"><div class="stat-label">Overtime</div><div class="stat-value">${rangeOT>0?fmtDur(rangeOT*60):'None'}</div><div class="stat-sub">${rangeOT>0?'over '+otW+'h threshold':'within threshold'}</div></div>
-          ${rate>0?`<div class="stat-card green"><div class="stat-label">You are owed</div><div class="stat-value">${fmtMoney(rangePay)}</div><div class="stat-sub">${rangeOT>0?'incl. OT pay':'@ '+fmtMoney(rate)+'/hr'}</div></div>`:''}
-        </div>
-        <div class="summary-callout">
-          From <strong>${new Date(rf+'T12:00:00').toLocaleDateString([],{month:'long',day:'numeric'})}</strong> to <strong>${new Date(rt+'T12:00:00').toLocaleDateString([],{month:'long',day:'numeric',year:'numeric'})}</strong>, you worked <strong>${plainDur(rangeMins)}</strong> across <strong>${rangeDays} day${rangeDays!==1?'s':''}</strong>${rangeOT>0?`, including <strong>${plainDur(rangeOT*60)} of overtime</strong>`:''}${rate>0?`. Your estimated pay for this period is <strong>${fmtMoney(rangePay)}</strong>`:''}.
-        </div>
-      </div>`
-    : rf&&rt&&rangeMins===0?`<div class="summary-callout" style="border-left-color:var(--amber)">No hours logged in this date range. Try adjusting your dates or add entries in the Calendar tab.</div>`
-    : ''}
-  `;
-
-  rangeCard.querySelector('#range-from').addEventListener('change',e=>{state.rangeFrom=e.target.value;renderTab();});
-  rangeCard.querySelector('#range-to').addEventListener('change',e=>{state.rangeTo=e.target.value;renderTab();});
-  wrap.appendChild(rangeCard);
-
-  // ── History list ──
-  const filters=['all','today','week','month'];
-  const filtered=getEntries().filter(e=>{
-    const d=new Date(e.clockIn);
-    if(state.histFilter==='today')return d.toDateString()===now.toDateString();
-    if(state.histFilter==='week')return(now-d)<7*86400000;
-    if(state.histFilter==='month')return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
-    return true;
-  }).sort((a,b)=>new Date(b.clockIn)-new Date(a.clockIn));
-
-  const totalMins=filtered.reduce((s,e)=>s+(e.durationMins||0),0);
-
-  const listCard=div('card');
-  listCard.innerHTML=`
-    <div class="card-header" style="flex-wrap:wrap;gap:10px">
-      <span class="card-title">All entries</span>
-      <div class="period-tabs">${filters.map(f=>`<button class="period-tab${state.histFilter===f?' active':''}" data-hfilt="${f}">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`).join('')}</div>
-    </div>
-    ${totalMins>0?`<div style="margin-bottom:1rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span class="badge badge-accent">${filtered.length} record${filtered.length!==1?'s':''}</span>
-      <span style="font-size:0.8rem;color:var(--text-secondary)">Total: <strong style="color:var(--accent)">${fmtDur(totalMins)}</strong> — ${plainDur(totalMins)}</span>
-      ${rate>0?`<span style="font-size:0.8rem;color:var(--green)">≈ ${fmtMoney(totalMins/60*rate)}</span>`:''}
-    </div>`:''}
-    ${filtered.length===0?`<div class="empty-state"><p>No records for this period.<br/>Clock in, or use the Calendar tab to add entries manually.</p></div>`:`
-      <table class="data-table">
-        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Duration</th><th>Note</th><th></th></tr></thead>
-        <tbody>
-          ${filtered.map(e=>`<tr>
-            <td><div style="font-size:0.82rem;font-weight:500">${new Date(e.clockIn).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})}</div><div style="font-size:0.68rem;color:var(--text-muted)">${new Date(e.clockIn).getFullYear()}</div></td>
-            <td class="mono" style="font-size:0.78rem">${fmt12(new Date(e.clockIn).getHours()*60+new Date(e.clockIn).getMinutes())}</td>
-            <td class="mono" style="font-size:0.78rem">${fmt12(new Date(e.clockOut).getHours()*60+new Date(e.clockOut).getMinutes())}</td>
-            <td><div style="font-weight:600;font-size:0.82rem">${fmtDur(e.durationMins)}</div><div style="font-size:0.7rem;color:var(--text-muted)">${plainDur(e.durationMins)}</div></td>
-            <td style="font-size:0.78rem;color:var(--text-muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.note||'—'}</td>
-            <td><button class="del-btn" data-delentry="${e.id}">×</button></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`}
-  `;
-  qsa('[data-hfilt]',listCard).forEach(b=>b.addEventListener('click',()=>{state.histFilter=b.dataset.hfilt;renderTab();}));
-  qsa('[data-delentry]',listCard).forEach(b=>b.addEventListener('click',e=>{if(confirm('Delete this entry?')){deleteEntry(e.currentTarget.dataset.delentry);renderTab();showToast('Entry deleted');}}));
-  wrap.appendChild(listCard);
-  return wrap;
-}
-
-// ════════════════════════════════════════════════════════════════
-//  TIME CARD TAB
-// ════════════════════════════════════════════════════════════════
-function renderTimeCard(){
-  const wrap=document.createElement('div');
-  const sets=getUserSettings(),entries=getEntries();
-  function getWeekStart(off=0){const d=new Date();d.setDate(d.getDate()-d.getDay()+off*7);d.setHours(0,0,0,0);return d;}
-  const ws=getWeekStart(state.weekOffset);
-  const we=new Date(ws);
-  const numDays=state.tcView==='biweekly'?14:state.tcView==='monthly'?new Date(ws.getFullYear(),ws.getMonth()+1,0).getDate():7;
-  we.setDate(ws.getDate()+numDays-1);we.setHours(23,59,59,999);
-  const filtered=entries.filter(e=>{const d=new Date(e.clockIn);return d>=ws&&d<=we;});
-  const byDay={};
-  filtered.forEach(e=>{const k=isoDate(new Date(e.clockIn));if(!byDay[k])byDay[k]={mins:0,entries:[]};byDay[k].mins+=e.durationMins||0;byDay[k].entries.push(e);});
-  const totalMins=filtered.reduce((s,e)=>s+(e.durationMins||0),0);
-  const totalH=totalMins/60,rate=parseFloat(sets.rate)||0;
-  const otW=sets.otWeek||40,otD=sets.otDay||8;
-  const regH=Math.min(totalH,otW),otH=Math.max(0,totalH-otW);
-  const totalPay=regH*rate+otH*rate*1.5;
-  const days=[];for(let i=0;i<numDays;i++){const d=new Date(ws);d.setDate(ws.getDate()+i);days.push(d);}
-  const card=div('card');
-  card.innerHTML=`
-    <div class="card-header" style="flex-wrap:wrap;gap:10px">
-      <div class="period-tabs">${['weekly','biweekly','monthly'].map(v=>`<button class="period-tab${state.tcView===v?' active':''}" data-tcview="${v}">${v.charAt(0).toUpperCase()+v.slice(1)}</button>`).join('')}</div>
-      <div class="week-nav">
-        <button class="btn btn-outline btn-sm" id="wk-prev">‹ Prev</button>
-        <div class="week-label">${ws.toLocaleDateString([],{month:'short',day:'numeric'})} – ${we.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}</div>
-        <button class="btn btn-outline btn-sm" id="wk-next">Next ›</button>
-      </div>
-    </div>
-    <div class="stat-grid">
-      <div class="stat-card accent"><div class="stat-label">Total worked</div><div class="stat-value">${fmtDur(totalMins)}</div><div class="stat-sub">${plainDur(totalMins)}</div></div>
-      <div class="stat-card"><div class="stat-label">Regular</div><div class="stat-value">${fmtDur(regH*60)}</div><div class="stat-sub">${rate>0?fmtMoney(regH*rate):'up to '+otW+'h/wk'}</div></div>
-      <div class="stat-card ${otH>0?'amber':''}"><div class="stat-label">Overtime</div><div class="stat-value">${otH>0?fmtDur(otH*60):'None'}</div><div class="stat-sub">${rate>0&&otH>0?fmtMoney(otH*rate*1.5)+' (1.5×)':'—'}</div></div>
-      ${rate>0?`<div class="stat-card green"><div class="stat-label">Est. pay</div><div class="stat-value">${fmtMoney(totalPay)}</div><div class="stat-sub">@ ${fmtMoney(rate)}/hr</div></div>`:''}
-    </div>
-    <table class="data-table">
-      <thead><tr><th>Day</th><th>Date</th><th>Hours</th><th>In plain words</th><th>OT</th>${rate>0?'<th>Pay</th>':''}</tr></thead>
-      <tbody>
-        ${days.map(d=>{
-          const k=isoDate(d),dd=byDay[k],dm=dd?dd.mins:0,dh=dm/60,dOT=Math.max(0,dh-otD);
-          const isToday=d.toDateString()===new Date().toDateString();
-          return`<tr style="${isToday?'background:rgba(79,142,247,0.06)':''}">
-            <td style="font-weight:${isToday?600:400};color:${isToday?'var(--accent)':'var(--text-primary)'}">${DAYS[d.getDay()]}</td>
-            <td class="mono" style="color:var(--text-muted);font-size:0.75rem">${d.toLocaleDateString([],{month:'short',day:'numeric'})}</td>
-            <td>${dm>0?`<strong style="font-size:0.85rem">${fmtDur(dm)}</strong>`:'<span style="color:var(--border-mid)">—</span>'}</td>
-            <td style="font-size:0.78rem;color:var(--text-secondary)">${dm>0?plainDur(dm):'—'}</td>
-            <td>${dOT>0?`<span class="badge badge-amber">+${fmtDur(dOT*60)} OT</span>`:'<span style="color:var(--border-mid)">—</span>'}</td>
-            ${rate>0?`<td class="mono" style="color:var(--green);font-size:0.78rem">${dm>0?fmtMoney(dh*rate):'—'}</td>`:''}
-          </tr>`;
-        }).join('')}
-      </tbody>
-      <tfoot><tr>
-        <td colspan="2" style="font-weight:600">Total</td>
-        <td style="font-weight:600">${fmtDur(totalMins)}</td>
-        <td style="font-size:0.78rem;color:var(--text-secondary)">${plainDur(totalMins)}</td>
-        <td>${otH>0?`<span class="badge badge-amber">${fmtDur(otH*60)} OT</span>`:'—'}</td>
-        ${rate>0?`<td class="mono" style="color:var(--green);font-weight:600">${fmtMoney(totalPay)}</td>`:''}
-      </tr></tfoot>
-    </table>
-  `;
-  qsa('[data-tcview]',card).forEach(b=>b.addEventListener('click',()=>{state.tcView=b.dataset.tcview;state.weekOffset=0;renderTab();}));
-  card.querySelector('#wk-prev').addEventListener('click',()=>{state.weekOffset--;renderTab();});
-  card.querySelector('#wk-next').addEventListener('click',()=>{state.weekOffset++;renderTab();});
-  wrap.appendChild(card);return wrap;
-}
-
-// ════════════════════════════════════════════════════════════════
-//  SETTINGS TAB
-// ════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  SETTINGS
+// ══════════════════════════════════════════════════════════════
 function renderSettings(){
   const wrap=document.createElement('div');
-  const s=getUserSettings();
-  const c1=div('card');c1.style.maxWidth='560px';
+  const s=getSettings();
+  const c1=div('card'); c1.style.maxWidth='520px';
   c1.innerHTML=`
-    <div class="card-header"><span class="card-title">Pay & overtime</span></div>
+    <div class="card-header"><span class="card-title">Pay settings</span></div>
     <div class="form-row cols-2" style="margin-bottom:14px">
       <div class="field"><label>Hourly rate ($)</label><input type="number" id="st-rate" value="${s.rate||''}" placeholder="e.g. 15.50" min="0" step="0.01"/></div>
-      <div class="field"><label>Pay period</label><select id="st-period"><option value="weekly"${s.payPeriod==='weekly'?' selected':''}>Weekly</option><option value="biweekly"${s.payPeriod==='biweekly'?' selected':''}>Bi-weekly</option><option value="monthly"${s.payPeriod==='monthly'?' selected':''}>Monthly</option></select></div>
-    </div>
-    <div class="form-row cols-2" style="margin-bottom:1.25rem">
-      <div class="field"><label>Weekly OT threshold (hrs)</label><input type="number" id="st-otweek" value="${s.otWeek||40}" min="1"/><div class="hint">Standard is 40h/week</div></div>
-      <div class="field"><label>Daily OT threshold (hrs)</label><input type="number" id="st-otday" value="${s.otDay||8}" min="1" step="0.5"/><div class="hint">Standard is 8h/day</div></div>
+      <div class="field"><label>Weekly OT after (hrs)</label><input type="number" id="st-ot" value="${s.otWeek||40}" min="1"/></div>
     </div>
     <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn btn-primary" id="save-settings">Save settings</button>
+      <button class="btn btn-primary" id="save-settings">Save</button>
       <span id="settings-saved" style="display:none;font-size:0.8rem;color:var(--green)">Saved!</span>
     </div>`;
   c1.querySelector('#save-settings').addEventListener('click',()=>{
-    const ns={rate:c1.querySelector('#st-rate').value,payPeriod:c1.querySelector('#st-period').value,otWeek:parseFloat(c1.querySelector('#st-otweek').value)||40,otDay:parseFloat(c1.querySelector('#st-otday').value)||8};
-    saveUserSettings(ns);state.calcSettings={...state.calcSettings,...ns};
-    const m=c1.querySelector('#settings-saved');m.style.display='inline';setTimeout(()=>m.style.display='none',2000);showToast('Settings saved');
+    const ns={rate:c1.querySelector('#st-rate').value, otWeek:parseFloat(c1.querySelector('#st-ot').value)||40};
+    saveSettings(ns); S.settings={...ns};
+    const m=c1.querySelector('#settings-saved'); m.style.display='inline'; setTimeout(()=>m.style.display='none',2000); toast('Settings saved');
   });
-  const c2=div('card');c2.style.cssText='max-width:560px;margin-top:1rem';
+  const c2=div('card'); c2.style.cssText='max-width:520px;margin-top:1rem';
   c2.innerHTML=`
     <div class="card-header"><span class="card-title">Account</span></div>
-    <div style="margin-bottom:1rem"><div style="font-size:0.875rem;font-weight:500">${state.users[state.user]?.name||''}</div><div style="font-size:0.78rem;color:var(--text-muted)">${state.user}</div></div>
-    <div class="card-header" style="margin-top:1rem;margin-bottom:0.75rem"><span class="card-title">Data</span></div>
-    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;line-height:1.6">All data is stored in your browser. Use Export in the top bar to download a CSV.</p>
+    <div style="margin-bottom:1rem"><div style="font-size:0.875rem;font-weight:500">${S.users[S.user]?.name||''}</div><div style="font-size:0.78rem;color:var(--text-muted)">${S.user}</div></div>
+    <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;line-height:1.6">All data is stored in your browser. Use Export in the top bar to download a CSV backup.</p>
     <button class="btn btn-danger btn-sm" id="clear-data">Clear all my data</button>`;
   c2.querySelector('#clear-data').addEventListener('click',()=>{
-    if(confirm('Delete ALL your data? Cannot be undone.')){const u=state.users[state.user];if(u){u.entries=[];saveDB();showToast('All data cleared');renderTab();}}
+    if(confirm('Delete ALL data? Cannot be undone.')){ const u=S.users[S.user]; if(u){ u.entries=[]; saveDB(); toast('Cleared'); renderTab(); } }
   });
-  wrap.appendChild(c1);wrap.appendChild(c2);return wrap;
+  wrap.appendChild(c1); wrap.appendChild(c2); return wrap;
 }
 
-// ── Bootstrap ──────────────────────────────────────────────────
+// ── Bootstrap ─────────────────────────────────────────────────
 function init(){
   loadDB();
-  renderLogin();
-  el('login-screen').classList.remove('hidden');
-  qsa('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
-  el('btn-logout').addEventListener('click',()=>{state.user=null;state.clockInTime=null;stopClockTimer();el('app').classList.add('hidden');el('login-screen').classList.remove('hidden');state.loginMode='login';state.loginError='';renderLogin();});
-  el('btn-export').addEventListener('click',exportCSV);
-  el('btn-clockin').addEventListener('click',handleClockToggle);
-  el('sidebar-toggle').addEventListener('click',()=>{const sb=el('sidebar'),ov=el('sidebar-overlay');sb.classList.toggle('open');ov.classList.toggle('hidden',!sb.classList.contains('open'));});
-  el('sidebar-overlay').addEventListener('click',()=>{el('sidebar').classList.remove('open');el('sidebar-overlay').classList.add('hidden');});
-  const params=new URLSearchParams(window.location.search);
-  if(params.get('tab')&&TAB_TITLES[params.get('tab')])state.tab=params.get('tab');
+  renderLogin(); $id('login-screen').classList.remove('hidden');
+  $$('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
+  $id('btn-logout').addEventListener('click',()=>{ S.user=null; S.clockIn=null; stopTimer(); $id('app').classList.add('hidden'); $id('login-screen').classList.remove('hidden'); S.loginMode='login'; S.loginError=''; renderLogin(); });
+  $id('btn-export').addEventListener('click',exportCSV);
+  $id('btn-ci').addEventListener('click',toggleClock);
+  $id('sidebar-toggle').addEventListener('click',()=>{ const sb=$id('sidebar'),ov=$id('sidebar-overlay'); sb.classList.toggle('open'); ov.classList.toggle('hidden',!sb.classList.contains('open')); });
+  $id('sidebar-overlay').addEventListener('click',()=>{ $id('sidebar').classList.remove('open'); $id('sidebar-overlay').classList.add('hidden'); });
 }
 document.addEventListener('DOMContentLoaded',init);
 
-// ── PWA ────────────────────────────────────────────────────────
+// ── PWA ───────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
-    const swPath = window.location.pathname.replace(/\/[^/]*$/, '') + '/sw.js';
-    navigator.serviceWorker.register(swPath, { scope: window.location.pathname.replace(/\/[^/]*$/, '') + '/' })
+    navigator.serviceWorker.register('./sw.js')
       .then(r=>console.log('[SW]',r.scope)).catch(e=>console.warn('[SW]',e));
   });
 }
 let _dip=null;
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();_dip=e;if(!localStorage.getItem('tc_install_dismissed')){const b=el('install-banner');if(b)b.classList.remove('hidden');}});
+window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); _dip=e; if(!localStorage.getItem('tc_nodismiss')){ const b=$id('install-banner'); if(b) b.classList.remove('hidden'); } });
 document.addEventListener('click',e=>{
-  if(e.target?.id==='install-btn'){if(_dip){_dip.prompt();_dip.userChoice.then(r=>{if(r.outcome==='accepted'){showToast('TimeCard installed!');const b=el('install-banner');if(b)b.classList.add('hidden');}_dip=null;});}}
-  if(e.target?.closest?.('#install-dismiss')){const b=el('install-banner');if(b)b.classList.add('hidden');localStorage.setItem('tc_install_dismissed','1');}
+  if(e.target?.id==='install-btn'){ if(_dip){ _dip.prompt(); _dip.userChoice.then(r=>{ if(r.outcome==='accepted'){ toast('TimeCard installed!'); const b=$id('install-banner'); if(b) b.classList.add('hidden'); } _dip=null; }); } }
+  if(e.target?.closest?.('#install-dismiss')){ const b=$id('install-banner'); if(b) b.classList.add('hidden'); localStorage.setItem('tc_nodismiss','1'); }
 });
-window.addEventListener('appinstalled',()=>{const b=el('install-banner');if(b)b.classList.add('hidden');showToast('TimeCard installed!');});
+window.addEventListener('appinstalled',()=>{ const b=$id('install-banner'); if(b) b.classList.add('hidden'); toast('Installed!'); });
